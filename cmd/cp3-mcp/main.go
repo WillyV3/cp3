@@ -114,8 +114,7 @@ type server struct {
 }
 
 func main() {
-	url := env("NATS_URL", "nats://127.0.0.1:4222")
-	c, err := peers.Connect(url, os.Getenv("NATS_CREDS"))
+	c, err := peers.ConnectFromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] connect:", err)
 		os.Exit(1)

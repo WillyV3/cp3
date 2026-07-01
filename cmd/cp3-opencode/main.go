@@ -85,7 +85,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[cp3-opencode] set CLAUDE_PEERS_AGENT or PEER_NAME")
 		os.Exit(1)
 	}
-	c, err := peers.Connect(env("NATS_URL", "nats://127.0.0.1:4222"), os.Getenv("NATS_CREDS"))
+	c, err := peers.ConnectFromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-opencode] connect:", err)
 		os.Exit(1)

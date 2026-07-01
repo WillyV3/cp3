@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -78,11 +79,26 @@ type Client struct {
 	kv jetstream.KeyValue
 }
 
-// Connect dials NATS. creds is a path to a .creds file, or "" for no auth.
-func Connect(url, creds string) (*Client, error) {
+// ConnectFromEnv dials using NATS_URL (default nats://127.0.0.1:4222), NATS_CREDS
+// (a .creds file) and NATS_TOKEN — the single place auth is resolved from the
+// environment so every binary authenticates the same way.
+func ConnectFromEnv() (*Client, error) {
+	url := os.Getenv("NATS_URL")
+	if url == "" {
+		url = "nats://127.0.0.1:4222"
+	}
+	return Connect(url, os.Getenv("NATS_CREDS"), os.Getenv("NATS_TOKEN"))
+}
+
+// Connect dials NATS. creds is a path to a .creds file and token is a plain auth
+// token; either may be "" (empty both = no auth). creds wins if both are set.
+func Connect(url, creds, token string) (*Client, error) {
 	var opts []nats.Option
-	if creds != "" {
+	switch {
+	case creds != "":
 		opts = append(opts, nats.UserCredentials(creds))
+	case token != "":
+		opts = append(opts, nats.Token(token))
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {

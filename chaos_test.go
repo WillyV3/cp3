@@ -33,7 +33,7 @@ func TestChaosServerRestart(t *testing.T) {
 	ctx := context.Background()
 
 	s1 := serverAt(t, store)
-	alice, err := Connect(s1.ClientURL(), "")
+	alice, err := Connect(s1.ClientURL(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestChaosServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Create bob's durable inbox up front so it's persisted, then bob goes away.
-	bob1, _ := Connect(s1.ClientURL(), "")
+	bob1, _ := Connect(s1.ClientURL(), "", "")
 	bctx, bcancel := context.WithCancel(ctx)
 	go bob1.Subscribe(bctx, "bob", func(Message) {})
 	time.Sleep(150 * time.Millisecond)
@@ -60,7 +60,7 @@ func TestChaosServerRestart(t *testing.T) {
 	// Restart from the same store.
 	s2 := serverAt(t, store)
 	t.Cleanup(s2.Shutdown)
-	bob2, err := Connect(s2.ClientURL(), "")
+	bob2, err := Connect(s2.ClientURL(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

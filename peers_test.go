@@ -33,7 +33,7 @@ func runServer(t *testing.T) *natsserver.Server {
 
 func newClient(t *testing.T, s *natsserver.Server) *Client {
 	t.Helper()
-	c, err := Connect(s.ClientURL(), "")
+	c, err := Connect(s.ClientURL(), "", "")
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
