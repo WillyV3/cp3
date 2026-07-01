@@ -1,7 +1,7 @@
 // cp3-opencode — bridges the claude-peers NATS network to a running opencode
 // server: each inbound peer message is injected as a steered prompt into one
 // opencode session. Same wall as every adapter — it knows only peers.Client.
-package main
+package opencode
 
 import (
 	"bytes"
@@ -79,7 +79,8 @@ func inject(ctx context.Context, session string, m peers.Message) error {
 	return nil
 }
 
-func main() {
+// Run bridges peer messages into an opencode server session until interrupted.
+func Run() {
 	name := env("CLAUDE_PEERS_AGENT", os.Getenv("PEER_NAME"))
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "[cp3-opencode] set CLAUDE_PEERS_AGENT or PEER_NAME")

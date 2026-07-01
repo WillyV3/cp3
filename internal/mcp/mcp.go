@@ -9,7 +9,7 @@
 // The wall: this binary knows only the peers.Client API. Swapping NATS_URL /
 // NATS_CREDS from localhost to a managed endpoint (e.g. Synadia Cloud) makes it
 // multiplayer with zero code change — hosting is a config choice, not a rebuild.
-package main
+package mcp
 
 import (
 	"bufio"
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	peers "github.com/WillyV3/claude-peers-v3"
+	"github.com/WillyV3/claude-peers-v3/internal/boot"
 )
 
 // ---- JSON-RPC transport (stdio) ----
@@ -141,8 +142,9 @@ type server struct {
 	unread []peers.Message // buffered for check_messages fallback
 }
 
-func main() {
-	c, err := peers.ConnectFromEnv()
+// Run serves MCP over stdio until stdin closes.
+func Run() {
+	c, err := boot.Connect()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] connect:", err)
 		os.Exit(1)

@@ -87,13 +87,7 @@ type Client struct {
 // file named by NATS_TOKEN_FILE, then ~/.config/cp3/token. The file paths keep
 // the secret out of argv, JSON config, and dotfile-synced shell rc.
 func ConnectFromEnv() (*Client, error) {
-	url := os.Getenv("NATS_URL")
-	if url == "" {
-		url = strings.TrimSpace(readConfigFile("url")) // hooks/statusline have no shell env
-	}
-	if url == "" {
-		url = "nats://127.0.0.1:4222"
-	}
+	url := URLFromEnv()
 	token := os.Getenv("NATS_TOKEN")
 	if token == "" {
 		if path := os.Getenv("NATS_TOKEN_FILE"); path != "" {
@@ -105,6 +99,18 @@ func ConnectFromEnv() (*Client, error) {
 		}
 	}
 	return Connect(url, os.Getenv("NATS_CREDS"), token)
+}
+
+// URLFromEnv resolves the server url the same way ConnectFromEnv does:
+// NATS_URL env, then ~/.config/cp3/url, then localhost.
+func URLFromEnv() string {
+	if url := os.Getenv("NATS_URL"); url != "" {
+		return url
+	}
+	if url := strings.TrimSpace(readConfigFile("url")); url != "" {
+		return url // hooks/statusline have no shell env
+	}
+	return "nats://127.0.0.1:4222"
 }
 
 // readConfigFile returns the contents of ~/.config/cp3/<name>, or "".

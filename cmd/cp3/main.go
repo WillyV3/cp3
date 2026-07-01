@@ -14,11 +14,14 @@ import (
 	"time"
 
 	peers "github.com/WillyV3/claude-peers-v3"
+	"github.com/WillyV3/claude-peers-v3/internal/boot"
 	"github.com/WillyV3/claude-peers-v3/internal/bridge"
+	"github.com/WillyV3/claude-peers-v3/internal/mcp"
+	"github.com/WillyV3/claude-peers-v3/internal/opencode"
 )
 
 func connect() *peers.Client {
-	c, err := peers.ConnectFromEnv()
+	c, err := boot.Connect() // auto-serves a local network if none is up
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "connect:", err)
 		os.Exit(1)
@@ -52,6 +55,12 @@ func main() {
 		cmdStatusLine(os.Args[2:])
 	case "doctor":
 		cmdDoctor(os.Args[2:])
+	case "serve":
+		cmdServe(os.Args[2:])
+	case "mcp":
+		mcp.Run()
+	case "opencode":
+		opencode.Run()
 	default:
 		usage()
 		os.Exit(2)
@@ -59,7 +68,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <send|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have

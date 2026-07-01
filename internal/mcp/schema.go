@@ -1,4 +1,4 @@
-package main
+package mcp
 
 var toolSchemas = []map[string]any{
 	{

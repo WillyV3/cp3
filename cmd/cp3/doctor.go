@@ -38,17 +38,13 @@ func cmdDoctor(args []string) {
 
 	// 1. config: where do url + token come from?
 	home, _ := os.UserHomeDir()
-	url := os.Getenv("NATS_URL")
-	urlSrc := "env NATS_URL"
-	if url == "" {
-		if _, err := os.Stat(filepath.Join(home, ".config", "cp3", "url")); err == nil {
-			url = "file"
-			urlSrc = "~/.config/cp3/url"
-		}
+	urlSrc := "localhost default (auto-serves on demand)"
+	if os.Getenv("NATS_URL") != "" {
+		urlSrc = "env NATS_URL"
+	} else if _, err := os.Stat(filepath.Join(home, ".config", "cp3", "url")); err == nil {
+		urlSrc = "~/.config/cp3/url"
 	}
-	report(url != "", url == "", "config",
-		fmt.Sprintf("server url via %s", urlSrc),
-		"set NATS_URL or write ~/.config/cp3/url")
+	report(true, false, "config", peers.URLFromEnv()+" via "+urlSrc, "")
 
 	// 2. server reachable + authed (one dial answers both).
 	c, err := peers.ConnectFromEnv()

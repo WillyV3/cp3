@@ -76,14 +76,17 @@ func cmdSetup(args []string) {
 	mcp := fs.String("mcp", defaultMCPPath(), "MCP config file to merge the claude-peers server into")
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
 	fs.Parse(args)
-	bin, err := exec.LookPath("cp3-mcp")
+	// The MCP entry points at THIS binary (`cp3 mcp`) by absolute path —
+	// os.Executable, not a PATH lookup, because Claude may launch from a shell
+	// (GUI, launchd) whose PATH never saw the install dir.
+	bin, err := os.Executable()
 	if err != nil {
-		bin = "cp3-mcp" // not on PATH yet; write the bare name, user installs it
+		bin = "cp3"
 	}
 	// Secrets are deliberately NOT written here — the token resolves at runtime
 	// from NATS_TOKEN / NATS_TOKEN_FILE / ~/.config/cp3/token. And the agent
-	// name is usually per-session (env or .claude-peers-agent file), not baked
-	// into shared config where every session would collide on it.
+	// name is usually per-session (dir identity, env, or .claude-peers-agent
+	// file), not baked into shared config where every session would collide.
 	env := map[string]any{"NATS_URL": *nats}
 	if *agent != "" {
 		env["CLAUDE_PEERS_AGENT"] = *agent
@@ -91,6 +94,7 @@ func cmdSetup(args []string) {
 	entry := map[string]any{
 		"type":    "stdio",
 		"command": bin,
+		"args":    []any{"mcp"},
 		"env":     env,
 	}
 	changed, err := mergeMCPServer(*mcp, "claude-peers", entry)
