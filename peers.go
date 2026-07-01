@@ -25,6 +25,9 @@ const (
 	presenceTTL  = 30 * time.Second
 	maxMsgSize   = 64 * 1024
 	retentionAge = 7 * 24 * time.Hour
+	maxBytes     = 1 << 30         // 1GiB hard cap — drop oldest before disk fills
+	dupWindow    = 2 * time.Minute // server-side dedup: a re-published msg-id inside this window is ignored
+	inboxIdle    = 30 * 24 * time.Hour // reap an inbox consumer abandoned this long (dead agent name)
 )
 
 // EventType is the closed set of event kinds on the log.
@@ -54,6 +57,7 @@ type Peer struct {
 	Machine string `json:"machine"`
 	Cwd     string `json:"cwd"`
 	Session string `json:"session"`
+	Summary string `json:"summary,omitempty"`
 	TS      int64  `json:"ts"`
 }
 
@@ -103,7 +107,10 @@ func (c *Client) Setup(ctx context.Context) error {
 		Subjects:   []string{subjectAll},
 		Storage:    jetstream.FileStorage,
 		MaxAge:     retentionAge,
+		MaxBytes:   maxBytes,
 		MaxMsgSize: maxMsgSize,
+		Discard:    jetstream.DiscardOld, // when full, drop oldest — never reject a new event
+		Duplicates: dupWindow,            // idempotent publish: same Nats-Msg-Id inside the window = one event
 	})
 	if err != nil {
 		return fmt.Errorf("create stream: %w", err)
@@ -151,7 +158,10 @@ func (c *Client) publish(ctx context.Context, subject string, t EventType, actor
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
-	if _, err := c.js.Publish(ctx, subject, body); err != nil {
+	// Msg-ID = envelope ID: if the client's internal retry re-sends after a lost
+	// ack, JetStream dedups within dupWindow — at-least-once becomes exactly-once
+	// on the log, so consumers never see the same event twice.
+	if _, err := c.js.Publish(ctx, subject, body, jetstream.WithMsgID(env.ID)); err != nil {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
 	return nil
@@ -181,6 +191,51 @@ func (c *Client) putPresence(ctx context.Context, p Peer) error {
 		return fmt.Errorf("kv put %s: %w", p.Agent, err)
 	}
 	return nil
+}
+
+// ErrNameTaken is returned by Claim when a live session already holds the name.
+var ErrNameTaken = errors.New("agent name already held")
+
+// Claim registers p only if the name is free (or already held by p's own
+// session). Returns ErrNameTaken + the current holder otherwise.
+// ponytail: best-effort uniqueness via the presence KV — a dead holder's key
+// expires in one TTL (30s), then the name frees. A tighter guarantee would need
+// a lock stream; not worth it for a fleet of agents.
+func (c *Client) Claim(ctx context.Context, p Peer) (*Peer, error) {
+	kv, err := c.kvBucket(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if entry, err := kv.Get(ctx, p.Agent); err == nil {
+		var holder Peer
+		if json.Unmarshal(entry.Value(), &holder) == nil && holder.Session != p.Session {
+			return &holder, ErrNameTaken
+		}
+	}
+	return nil, c.Register(ctx, p)
+}
+
+// SetSummary updates an agent's presence summary (re-puts the KV record and
+// emits a presence event so consumers see the change).
+func (c *Client) SetSummary(ctx context.Context, agent, summary string) error {
+	kv, err := c.kvBucket(ctx)
+	if err != nil {
+		return err
+	}
+	entry, err := kv.Get(ctx, agent)
+	if err != nil {
+		return fmt.Errorf("kv get %s: %w", agent, err)
+	}
+	var p Peer
+	if err := json.Unmarshal(entry.Value(), &p); err != nil {
+		return fmt.Errorf("unmarshal peer: %w", err)
+	}
+	p.Summary = summary
+	p.TS = nowMillis()
+	if err := c.putPresence(ctx, p); err != nil {
+		return err
+	}
+	return c.publish(ctx, "peers.presence", EventPresence, agent, p)
 }
 
 // Heartbeat refreshes an agent's presence key so its TTL doesn't expire.
@@ -256,10 +311,14 @@ func (c *Client) Send(ctx context.Context, m Message) error {
 // messages sent while offline drain on reconnect. Blocks until ctx is done;
 // h is called for each message (auto-acked).
 func (c *Client) Subscribe(ctx context.Context, agent string, h func(Message)) error {
+	// Durable so messages sent while offline drain on reconnect; InactiveThreshold
+	// reaps the consumer if the agent name is abandoned for good — no leaked
+	// consumers piling up on the server (the ephemeral-session snag).
 	cons, err := c.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Durable:       "inbox-" + agent,
-		FilterSubject: "peers.msg." + agent,
-		AckPolicy:     jetstream.AckExplicitPolicy,
+		Durable:           "inbox-" + agent,
+		FilterSubject:     "peers.msg." + agent,
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		InactiveThreshold: inboxIdle,
 	})
 	if err != nil {
 		return fmt.Errorf("create inbox consumer: %w", err)

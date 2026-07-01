@@ -7,6 +7,7 @@ import (
 	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // runServer starts an in-process NATS server with JetStream (isolated per test).
@@ -150,6 +151,30 @@ func TestPresenceLifecycle(t *testing.T) {
 	list, _ = c.Peers(ctx)
 	if len(list) != 0 {
 		t.Fatalf("want empty after deregister, got %+v", list)
+	}
+}
+
+// 6. idempotency: re-publishing the same Nats-Msg-Id inside the dedup window is
+// collapsed to a single event on the log (no duplicate delivery on ack loss).
+func TestPublishDedup(t *testing.T) {
+	c := newClient(t, runServer(t))
+	ctx := context.Background()
+	subj := "peers.presence" // any subject the stream owns
+	for i := 0; i < 3; i++ {
+		if _, err := c.js.Publish(ctx, subj, []byte(`{"x":1}`), jetstream.WithMsgID("same-id")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := c.js.Stream(ctx, streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := s.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 1 {
+		t.Fatalf("want 1 msg after 3 dup publishes, got %d", info.State.Msgs)
 	}
 }
 
