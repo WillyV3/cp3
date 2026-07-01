@@ -89,21 +89,35 @@ type Client struct {
 func ConnectFromEnv() (*Client, error) {
 	url := os.Getenv("NATS_URL")
 	if url == "" {
+		url = strings.TrimSpace(readConfigFile("url")) // hooks/statusline have no shell env
+	}
+	if url == "" {
 		url = "nats://127.0.0.1:4222"
 	}
 	token := os.Getenv("NATS_TOKEN")
 	if token == "" {
-		path := os.Getenv("NATS_TOKEN_FILE")
-		if path == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				path = filepath.Join(home, ".config", "cp3", "token")
+		if path := os.Getenv("NATS_TOKEN_FILE"); path != "" {
+			if b, err := os.ReadFile(path); err == nil {
+				token = strings.TrimSpace(string(b))
 			}
-		}
-		if b, err := os.ReadFile(path); err == nil {
-			token = strings.TrimSpace(string(b))
+		} else {
+			token = strings.TrimSpace(readConfigFile("token"))
 		}
 	}
 	return Connect(url, os.Getenv("NATS_CREDS"), token)
+}
+
+// readConfigFile returns the contents of ~/.config/cp3/<name>, or "".
+func readConfigFile(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".config", "cp3", name))
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // Connect dials NATS. creds is a path to a .creds file and token is a plain auth
