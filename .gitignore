@@ -1,3 +1,5 @@
-cp3
+/cp3
+/cp3-mcp
+/cp3-opencode
 nats-store/
 *.log
