@@ -41,7 +41,6 @@ const (
 	EventDeregister EventType = "deregister"
 	EventPresence   EventType = "presence"
 	EventMessage    EventType = "message"
-	EventDelivered  EventType = "delivered"
 )
 
 // Envelope is the versioned wire contract every consumer builds against.

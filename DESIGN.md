@@ -1,73 +1,69 @@
-# claude-peers v3 — NATS-native, event-sourced peer network
+# cp3 design
 
-Clean-room rebuild. Replaces v1 (UCAN + HTTP broker + hand-rolled everything) and
-v2 (HTTP + SQLite broker). **There is no broker to build — NATS is the broker.**
-We build only: the event contract, the injection adapters (the moat), and projections.
+**The durable event log is the source of truth. State is a projection.
+Consumers are decoupled.** Every peer action is an immutable event on the log:
+nothing is lost, every consumer sees everything, new tools replay history.
 
-## Principle
-**The durable event log is the source of truth. State is a projection. Consumers are
-decoupled.** Every peer action is an immutable event on the log → nothing is lost,
-every consumer sees everything, new apps replay history. No side-channel state, ever.
+## Transport: embedded NATS JetStream
 
-## Transport: NATS JetStream
-- **Stream `PEERS`** — subjects `peers.>`, file storage, retention (age 7d / size cap),
-  MaxMsgSize 64KB. This is the source of truth (replayable).
-- **KV bucket `PEERS_PRESENCE`** — key=agent, TTL=30s. Heartbeat refreshes the key;
-  key present = online, expired = offline. Current-state view (fast reads).
+- **Stream `PEERS`** — subjects `peers.>`, file storage, 7d retention,
+  64KB max message. The replayable source of truth.
+- **KV bucket `PEERS_PRESENCE`** — key = agent name, TTL 30s. Heartbeat
+  refreshes the key; present = online, expired = gone. No offline state to
+  manage.
 
-## Event envelope (versioned contract)
+`cp3 serve` runs the server in-process. Clients auto-start it on localhost
+when nothing is listening; remote URLs never auto-start.
+
+## Event envelope
+
 ```json
-{ "v": 1, "id": "<uuid>", "type": "<event-type>", "ts": <unixMillis>, "actor": "<agent>", "data": { ... } }
+{ "v": 1, "id": "<hex>", "type": "<event-type>", "ts": <unixMillis>, "actor": "<agent>", "data": { ... } }
 ```
-Consumers build against this. Bump `v` on breaking changes; never remove fields in v1.
 
-## Subjects / event types
+`v` bumps on breaking changes; fields are never removed within a version.
+Events carry ids and are published with NATS msg-id dedup — delivery is
+at-least-once, consumers can dedup on `id`.
+
+## Subjects
+
 | subject | type | data |
 |---|---|---|
-| `peers.lifecycle.register` | register | machine, cwd, session |
-| `peers.lifecycle.deregister` | deregister | (reason) |
-| `peers.presence` | presence | online:bool, machine, cwd  (also KV) |
+| `peers.lifecycle.register` | register | agent, machine, cwd, session |
+| `peers.lifecycle.deregister` | deregister | agent |
+| `peers.presence` | presence | summary changes |
 | `peers.msg.<to>` | message | id, from, to, content, deliverAs |
-| `peers.msg.ack` | delivered | msgId, to, at |
-Adapter inbox = subscribe `peers.msg.<self>`. Send = publish `peers.msg.<target>`.
-Firehose consumer = subscribe `peers.>` (sees EVERYTHING — full visibility).
 
-## Auth (battle-tested, not hand-rolled)
-- **NATS accounts + user creds (nkey/JWT).** The fleet = one account (agents in it
-  trust each other — the tailnet-trust model, made explicit + enforced by NATS).
-- Per-user permissions: publish `peers.msg.*` + `peers.lifecycle.*` + `peers.presence`;
-  subscribe `peers.msg.<self>` + `peers.lifecycle.*` + `peers.presence` (+ `peers.>` for consumers).
-- **Cross-org / "pairing" = NATS account export/import** (native, explicit cross-account
-  sharing) — replaces v2's hand-rolled pairing. Not needed within the fleet account.
-- Public exposure = a leaf-node / auth-gateway issuing scoped creds. NATS never faces raw internet.
+An agent's inbox is a durable consumer filtered to `peers.msg.<self>` —
+offline messages drain on reconnect. The firehose (`cp3 watch`) subscribes
+`peers.>` and sees everything.
 
-## Injection adapters (the ONLY bespoke code — the moat)
-Each runtime, a thin NATS client:
-- subscribe `peers.msg.<me>` → inject into the live TUI (claude/channel, pi steer,
-  codex turn/steer, opencode delivery).
-- `peer_send` → publish `peers.msg.<target>` + emit `peers.msg` event.
-- on start: publish `register` + write presence KV; heartbeat KV every 15s.
-- durable JetStream consumer for the inbox → offline messages drain on reconnect
-  (nothing lost; replaces v2's SQLite mailbox).
+## Auth
 
-## Projections / read models (derived, never authoritative)
-- `peers` (who's online) = read `PEERS_PRESENCE` KV.
-- history for X = replay `peers.msg.<x>` from the stream.
-- These are CONSUMERS of the log, not the source of truth.
+A shared token, generated on first `serve` (0600 file), required for every
+connection including localhost. Resolution order: `NATS_TOKEN`,
+`NATS_TOKEN_FILE`, `~/.config/cp3/token` — never argv, never config JSON.
 
-## The guarantees (and how each is met)
-- **Nothing lost** — JetStream durable consumers + explicit ack; a down consumer resumes from its offset.
-- **Full visibility** — every state change is an event on `peers.>`; adding a consumer = one subscribe, zero producer changes.
-- **At-least-once + idempotent** — events carry `id`; consumers dedup.
-- **No silent state** — visibility-audit test asserts every mutating op emits a matching event.
+One token = one trust domain (everyone on the network can message everyone).
+For per-user credentials or cross-org sharing, NATS accounts + nkey/JWT slot
+in without code changes — `NATS_CREDS` is already plumbed through.
 
-## What we deleted vs v1/v2 (ponytail)
-Gone: HTTP broker, SQLite, UCAN delegation chains, hand-rolled pairing, hand-rolled
-offline-queue, hand-rolled presence, the NATS-publisher gap (v3 IS a NATS client → the
-5 fleet consumers get events natively). Kept: the injection adapters.
+## Adapters
 
-## Test plan (edge cases)
-Embedded JetStream server in-test (isolated). Cover: publish/subscribe roundtrip;
-presence TTL online→offline; **replay** (consumer down → events → resume, zero gaps);
-**visibility audit** (every op → event); **e2e trace** (msg → deliver → ack on log +
-fresh consumer replays full history); **chaos** (server restart → durable consumer resumes).
+The only bespoke code. Each runtime is a thin client: subscribe the inbox,
+inject into the live TUI (Claude `claude/channel`, pi steer, opencode
+delivery), publish to send. Anything that can read a subprocess can join via
+`cp3 subscribe` (one JSON message per line).
+
+## Projections
+
+`cp3 peers` reads the presence KV. History is a replay of `peers.msg.<x>`.
+`cp3 consumers` reports every subscriber's lag so an abandoned consumer is
+visible instead of silently rotting. All derived, none authoritative.
+
+## Tests
+
+Everything runs against an embedded in-process server: register/list,
+delivery, offline drain, presence lifecycle, publish dedup, firehose
+visibility, consumer listing, token auth (env + file), chaos
+(server restart → durable consumer resumes). `go test -race ./...`.
