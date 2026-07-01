@@ -326,8 +326,13 @@ func (c *Client) Deregister(ctx context.Context, agent string) error {
 }
 
 // Peers returns everyone currently present (KV projection = live view).
+// A missing bucket means the network has never been set up here — that is an
+// empty network, not an error.
 func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 	kv, err := c.kvBucket(ctx)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
