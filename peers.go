@@ -323,6 +323,37 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 	return out, nil
 }
 
+// ConsumerStatus is a liveness snapshot of one consumer on the log. Pending
+// piling up with no recent delivery = an abandoned durable (the v1 graveyard).
+type ConsumerStatus struct {
+	Name         string
+	Pending      uint64 // not yet delivered
+	AckPending   int    // delivered, unacked
+	LastDelivery *time.Time
+}
+
+// Consumers lists every consumer attached to the PEERS stream.
+func (c *Client) Consumers(ctx context.Context) ([]ConsumerStatus, error) {
+	s, err := c.js.Stream(ctx, streamName)
+	if err != nil {
+		return nil, fmt.Errorf("stream: %w", err)
+	}
+	var out []ConsumerStatus
+	lister := s.ListConsumers(ctx)
+	for info := range lister.Info() {
+		cs := ConsumerStatus{Name: info.Name, Pending: info.NumPending, AckPending: info.NumAckPending}
+		if info.Delivered.Last != nil {
+			t := *info.Delivered.Last
+			cs.LastDelivery = &t
+		}
+		out = append(out, cs)
+	}
+	if err := lister.Err(); err != nil {
+		return nil, fmt.Errorf("list consumers: %w", err)
+	}
+	return out, nil
+}
+
 // Send appends a message event to peers.msg.<to>.
 func (c *Client) Send(ctx context.Context, m Message) error {
 	if m.ID == "" {

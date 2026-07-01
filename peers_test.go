@@ -154,6 +154,39 @@ func TestPresenceLifecycle(t *testing.T) {
 	}
 }
 
+// 7. consumer observability: a durable inbox shows up in Consumers(); a message
+// sent with nobody draining shows as pending backlog (the dead-durable shape).
+func TestConsumersList(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// bob subscribes (creates durable inbox-bob), then goes away.
+	bctx, bcancel := context.WithCancel(ctx)
+	go c.Subscribe(bctx, "bob", func(Message) {})
+	time.Sleep(150 * time.Millisecond)
+	bcancel()
+	time.Sleep(50 * time.Millisecond)
+
+	// a message lands with nobody draining -> pending on the durable.
+	if err := c.Send(ctx, Message{From: "alice", To: "bob", Content: "backlog"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "inbox-bob pending backlog", func() bool {
+		list, err := c.Consumers(ctx)
+		if err != nil {
+			return false
+		}
+		for _, cs := range list {
+			if cs.Name == "inbox-bob" && cs.Pending >= 1 {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // 6. idempotency: re-publishing the same Nats-Msg-Id inside the dedup window is
 // collapsed to a single event on the log (no duplicate delivery on ack loss).
 func TestPublishDedup(t *testing.T) {

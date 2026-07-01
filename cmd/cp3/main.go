@@ -46,6 +46,10 @@ func main() {
 		cmdSetup(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "consumers":
+		cmdConsumers(os.Args[2:])
+	case "statusline":
+		cmdStatusLine(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -53,7 +57,43 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <send|peers|watch|register|subscribe|setup|run> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <send|peers|watch|register|subscribe|consumers|statusline|setup|run> [flags]")
+}
+
+// consumerVerdict classifies a consumer's liveness — the check that would have
+// caught the five dead v1 durables.
+func consumerVerdict(cs peers.ConsumerStatus, now time.Time) string {
+	switch {
+	case cs.LastDelivery != nil && now.Sub(*cs.LastDelivery) < 2*time.Minute:
+		return "active"
+	case cs.Pending > 0:
+		return "STALE" // backlog piling up, nobody draining
+	default:
+		return "idle"
+	}
+}
+
+func cmdConsumers(args []string) {
+	fs := flag.NewFlagSet("consumers", flag.ExitOnError)
+	fs.Parse(args)
+	c := connect()
+	defer c.Close()
+	list, err := c.Consumers(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "consumers:", err)
+		os.Exit(1)
+	}
+	now := time.Now()
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "CONSUMER\tPENDING\tACK-PENDING\tLAST-DELIVERY\tVERDICT")
+	for _, cs := range list {
+		last := "never"
+		if cs.LastDelivery != nil {
+			last = now.Sub(*cs.LastDelivery).Round(time.Second).String() + " ago"
+		}
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", cs.Name, cs.Pending, cs.AckPending, last, consumerVerdict(cs, now))
+	}
+	w.Flush()
 }
 
 // cmdSubscribe registers an agent and streams each inbound message to stdout as
@@ -129,6 +169,8 @@ func cmdPeers(args []string) {
 
 func cmdWatch(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	as := fs.String("as", "", "register this watcher in presence (visible in cp3 peers, dies visibly)")
+	fromStart := fs.Bool("from-start", true, "replay retained history before live events")
 	fs.Parse(args)
 	c := connect()
 	defer c.Close()
@@ -138,7 +180,31 @@ func cmdWatch(args []string) {
 		fmt.Fprintln(os.Stderr, "setup:", err)
 		os.Exit(1)
 	}
-	err := c.Watch(ctx, true, func(e peers.Envelope) {
+	if *as != "" {
+		// A long-lived consumer that registers presence is a consumer whose
+		// death is visible within one TTL — the anti-graveyard rule.
+		host, _ := os.Hostname()
+		cwd, _ := os.Getwd()
+		p := peers.Peer{Agent: *as, Machine: host, Cwd: cwd, Session: fmt.Sprintf("watch-%d", os.Getpid())}
+		if err := c.Register(ctx, p); err != nil {
+			fmt.Fprintln(os.Stderr, "watch: register:", err)
+			os.Exit(1)
+		}
+		defer c.Deregister(context.Background(), *as)
+		go func() {
+			tk := time.NewTicker(15 * time.Second)
+			defer tk.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tk.C:
+					c.Heartbeat(ctx, *as)
+				}
+			}
+		}()
+	}
+	err := c.Watch(ctx, *fromStart, func(e peers.Envelope) {
 		fmt.Printf("%s  %-11s  %s  %s\n", time.UnixMilli(e.TS).Format("15:04:05"), e.Type, e.Actor, string(e.Data))
 	})
 	if err != nil {
