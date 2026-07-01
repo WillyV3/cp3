@@ -13,22 +13,26 @@ import (
 )
 
 // statusLine renders the one compact line a coding-agent statusline shows.
-// Pure: given the peer list (or an error) it produces the line — testable
-// without NATS. v3 presence semantics: in the KV = online, expired = gone,
-// so there is no "offline" state like v2 had.
+// Pure: given the peer list, this agent's undrained inbox count, and any fetch
+// error, it produces the line — testable without NATS. Color is always
+// emitted (the consumer is Claude's statusline renderer, which reads ANSI
+// from a pipe); NO_COLOR still disables via paint.
 //
-//	no name        -> "○ peers: no name set"
-//	fetch error    -> "○ peers: nats down"
-//	not registered -> "○ peers: <name> · not registered"
-//	registered     -> "● peers: <name> · <N> online"
+//	no name        -> dim  "○ peers: —"
+//	fetch error    -> red  "○ peers: down"
+//	not registered -> yell "○ peers: <name> · not registered"
+//	registered     -> green"● peers: <name> · <N> online"
 //
-// Other peers sharing this cwd append "· ⚠ also here: <names>".
-func statusLine(name, cwd string, list []peers.Peer, err error) string {
+// Extras: "✉N" (yellow) when N messages sit undrained in this agent's inbox —
+// something is queued and nothing is consuming; "⚠ also here: x" (red) when
+// other peers share this cwd. v3 presence: in the KV = online, expired = gone.
+func statusLine(name, cwd string, list []peers.Peer, pending uint64, err error) string {
+	const on = true
 	if name == "" {
-		return "○ peers: no name set"
+		return paint(on, cDim, "○ peers: —")
 	}
 	if err != nil {
-		return "○ peers: nats down"
+		return paint(on, cRed, "○ peers: down")
 	}
 	found := false
 	var here []string
@@ -41,26 +45,18 @@ func statusLine(name, cwd string, list []peers.Peer, err error) string {
 	}
 	var line string
 	if !found {
-		line = fmt.Sprintf("○ peers: %s · not registered", name)
+		line = paint(on, cYellow, "○") + " peers: " + paint(on, cDim, name+" · not registered")
 	} else {
-		line = fmt.Sprintf("● peers: %s · %d online", name, len(list))
+		line = paint(on, cGreen, "●") + " peers: " + paint(on, cBold, name) +
+			paint(on, cDim, " · ") + paint(on, cCyan, fmt.Sprintf("%d online", len(list)))
+	}
+	if pending > 0 {
+		line += paint(on, cDim, " · ") + paint(on, cYellow, fmt.Sprintf("✉%d", pending))
 	}
 	if len(here) > 0 {
-		line += " · ⚠ also here: " + strings.Join(here, ", ")
+		line += paint(on, cDim, " · ") + paint(on, cRed, "⚠ also here: "+strings.Join(here, ", "))
 	}
 	return line
-}
-
-// agentNameFromEnv resolves this session's peer name the same way cp3-mcp
-// does: CLAUDE_PEERS_AGENT env, then a .claude-peers-agent file in the cwd.
-func agentNameFromEnv() string {
-	if v := os.Getenv("CLAUDE_PEERS_AGENT"); v != "" {
-		return v
-	}
-	if b, err := os.ReadFile(".claude-peers-agent"); err == nil {
-		return strings.TrimSpace(string(b))
-	}
-	return ""
 }
 
 // drainStdin discards piped stdin (Claude pumps session JSON at statusline
@@ -76,32 +72,39 @@ func drainStdin() {
 func cmdStatusLine(args []string) {
 	fs := flag.NewFlagSet("statusline", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // swallow flag errors too
-	name := fs.String("name", "", "peer name (defaults to CLAUDE_PEERS_AGENT / .claude-peers-agent)")
+	name := fs.String("name", "", "peer name (defaults to this dir's identity)")
 	_ = fs.Parse(args)
 	drainStdin()
-	n := *name
-	if n == "" {
-		n = agentNameFromEnv()
-	}
 	cwd, _ := os.Getwd()
+	n, _ := peers.ResolveIdentity(cwd, *name)
 
 	done := make(chan string, 1)
 	go func() {
 		c, err := peers.ConnectFromEnv()
 		if err != nil {
-			done <- statusLine(n, cwd, nil, err)
+			done <- statusLine(n, cwd, nil, 0, err)
 			return
 		}
 		defer c.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
 		defer cancel()
 		list, err := c.Peers(ctx)
-		done <- statusLine(n, cwd, list, err)
+		var pending uint64
+		if err == nil {
+			if cs, cerr := c.Consumers(ctx); cerr == nil {
+				for _, s := range cs {
+					if s.Name == "inbox-"+n {
+						pending = s.Pending
+					}
+				}
+			}
+		}
+		done <- statusLine(n, cwd, list, pending, err)
 	}()
 	select {
 	case line := <-done:
 		fmt.Println(line)
 	case <-time.After(700 * time.Millisecond):
-		fmt.Println(statusLine(n, cwd, nil, context.DeadlineExceeded))
+		fmt.Println(statusLine(n, cwd, nil, 0, context.DeadlineExceeded))
 	}
 }

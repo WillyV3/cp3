@@ -50,6 +50,8 @@ func main() {
 		cmdConsumers(os.Args[2:])
 	case "statusline":
 		cmdStatusLine(os.Args[2:])
+	case "doctor":
+		cmdDoctor(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -57,7 +59,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <send|peers|watch|register|subscribe|consumers|statusline|setup|run> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <send|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have
@@ -84,6 +86,7 @@ func cmdConsumers(args []string) {
 		os.Exit(1)
 	}
 	now := time.Now()
+	tty := stdoutIsTTY()
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "CONSUMER\tPENDING\tACK-PENDING\tLAST-DELIVERY\tVERDICT")
 	for _, cs := range list {
@@ -91,7 +94,16 @@ func cmdConsumers(args []string) {
 		if cs.LastDelivery != nil {
 			last = now.Sub(*cs.LastDelivery).Round(time.Second).String() + " ago"
 		}
-		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", cs.Name, cs.Pending, cs.AckPending, last, consumerVerdict(cs, now))
+		verdict := consumerVerdict(cs, now)
+		switch verdict { // last column only: ANSI would break tabwriter widths elsewhere
+		case "active":
+			verdict = paint(tty, cGreen, verdict)
+		case "STALE":
+			verdict = paint(tty, cRed, verdict)
+		default:
+			verdict = paint(tty, cDim, verdict)
+		}
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", cs.Name, cs.Pending, cs.AckPending, last, verdict)
 	}
 	w.Flush()
 }
@@ -126,13 +138,17 @@ func cmdSubscribe(args []string) {
 
 func cmdSend(args []string) {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
-	from := fs.String("from", "", "sender agent")
+	from := fs.String("from", "", "sender agent (defaults to this dir's identity)")
 	to := fs.String("to", "", "recipient agent")
 	mode := fs.String("mode", "steer", "delivery mode: steer|queue")
 	fs.Parse(args)
 	content := strings.Join(fs.Args(), " ")
+	if *from == "" {
+		cwd, _ := os.Getwd()
+		*from, _ = peers.ResolveIdentity(cwd, "")
+	}
 	if *from == "" || *to == "" || content == "" {
-		fmt.Fprintln(os.Stderr, "send: --from, --to and a message are required")
+		fmt.Fprintln(os.Stderr, "send: --to and a message are required (--from resolved from identity)")
 		os.Exit(2)
 	}
 	c := connect()

@@ -9,6 +9,7 @@ import (
 )
 
 func TestStatusLine(t *testing.T) {
+	t.Setenv("NO_COLOR", "1") // golden strings stay readable; paint() no-ops
 	list := []peers.Peer{
 		{Agent: "keeper", Cwd: "/w"},
 		{Agent: "jim", Cwd: "/w"},
@@ -17,20 +18,38 @@ func TestStatusLine(t *testing.T) {
 	cases := []struct {
 		name, cwd string
 		list      []peers.Peer
+		pending   uint64
 		err       error
 		want      string
 	}{
-		{"", "/w", list, nil, "○ peers: no name set"},
-		{"keeper", "/w", nil, errors.New("boom"), "○ peers: nats down"},
-		{"ghost", "", list, nil, "○ peers: ghost · not registered"},
-		{"keeper", "/elsewhere", list, nil, "● peers: keeper · 3 online · ⚠ also here: far"},
-		{"keeper", "/solo", list, nil, "● peers: keeper · 3 online"},
+		{"", "/w", list, 0, nil, "○ peers: —"},
+		{"keeper", "/w", nil, 0, errors.New("boom"), "○ peers: down"},
+		{"ghost", "", list, 0, nil, "○ peers: ghost · not registered"},
+		{"keeper", "/elsewhere", list, 0, nil, "● peers: keeper · 3 online · ⚠ also here: far"},
+		{"keeper", "/solo", list, 0, nil, "● peers: keeper · 3 online"},
+		{"keeper", "/solo", list, 4, nil, "● peers: keeper · 3 online · ✉4"},
 	}
 	for _, c := range cases {
-		if got := statusLine(c.name, c.cwd, c.list, c.err); got != c.want {
-			t.Errorf("statusLine(%q,%q): got %q want %q", c.name, c.cwd, got, c.want)
+		if got := statusLine(c.name, c.cwd, c.list, c.pending, c.err); got != c.want {
+			t.Errorf("statusLine(%q,%q,pending=%d): got %q want %q", c.name, c.cwd, c.pending, got, c.want)
 		}
 	}
+}
+
+func TestStatusLineHasColor(t *testing.T) {
+	// Without NO_COLOR the line must actually carry ANSI — the whole point.
+	if got := statusLine("keeper", "/w", []peers.Peer{{Agent: "keeper"}}, 0, nil); !containsANSI(got) {
+		t.Errorf("expected ANSI codes in %q", got)
+	}
+}
+
+func containsANSI(s string) bool {
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '\x1b' && s[i+1] == '[' {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConsumerVerdict(t *testing.T) {

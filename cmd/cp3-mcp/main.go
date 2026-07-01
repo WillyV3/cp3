@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,19 +78,46 @@ func (t *transport) notify(method string, params any) {
 
 // ---- identity ----
 
-func agentName() string {
+func asFlag() string {
 	for _, i := range os.Args[1:] {
 		if strings.HasPrefix(i, "--as=") {
 			return strings.TrimPrefix(i, "--as=")
 		}
 	}
-	if v := os.Getenv("CLAUDE_PEERS_AGENT"); v != "" {
-		return v
+	return ""
+}
+
+// claimIdentity resolves and claims this session's name. Collision policy by
+// how deliberate the name was: a dir-derived default quietly takes a -2/-3
+// suffix (zero-config must never error), an explicit name falls back to
+// ephemeral with a loud stderr line (silently renaming a chosen identity
+// would misroute messages).
+func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source string) string {
+	if p.Agent == "" {
+		return ""
 	}
-	if b, err := os.ReadFile(".claude-peers-agent"); err == nil {
-		return strings.TrimSpace(string(b))
+	holder, err := c.Claim(ctx, p)
+	if err == nil {
+		return p.Agent
 	}
-	return "" // ephemeral
+	if !errors.Is(err, peers.ErrNameTaken) {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] claim:", err)
+		return ""
+	}
+	if source == "default" {
+		base := p.Agent
+		for i := 2; i <= 5; i++ {
+			p.Agent = fmt.Sprintf("%s-%d", base, i)
+			if _, err := c.Claim(ctx, p); err == nil {
+				return p.Agent
+			}
+		}
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] %s through %s-5 all taken; running ephemeral\n", base, base)
+		return ""
+	}
+	fmt.Fprintf(os.Stderr, "[cp3-mcp] name %q held by session %s on %s; running ephemeral (pick another with --as or CLAUDE_PEERS_AGENT)\n",
+		p.Agent, holder.Session, holder.Machine)
+	return ""
 }
 
 func env(k, def string) string {
@@ -131,16 +159,15 @@ func main() {
 	s := &server{
 		t:       newTransport(),
 		c:       c,
-		me:      agentName(),
 		machine: env("CLAUDE_PEERS_MACHINE", hostname()),
 		cwd:     cwd,
 		session: env("CLAUDE_SESSION_ID", newSession()),
 	}
+	name, source := peers.ResolveIdentity(cwd, asFlag())
+	s.me = name
+	s.me = claimIdentity(ctx, c, s.peer(), source)
 
 	if s.me != "" {
-		if err := c.Register(ctx, s.peer()); err != nil {
-			fmt.Fprintln(os.Stderr, "[cp3-mcp] register:", err)
-		}
 		go s.heartbeat(ctx)
 		go s.pushLoop(ctx) // inject inbound peer messages into the live session
 	}
