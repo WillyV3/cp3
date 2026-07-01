@@ -2,6 +2,8 @@ package peers
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -34,6 +36,20 @@ func TestTokenAuth(t *testing.T) {
 	if _, err := Connect(url, "", "wrong"); err == nil {
 		t.Fatal("expected auth failure with wrong token")
 	}
+	// Token from a file via NATS_TOKEN_FILE (the on-disk secret path) -> connects.
+	tf := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tf, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NATS_URL", url)
+	t.Setenv("NATS_TOKEN", "")
+	t.Setenv("NATS_TOKEN_FILE", tf)
+	cf, err := ConnectFromEnv()
+	if err != nil {
+		t.Fatalf("connect via token file: %v", err)
+	}
+	cf.Close()
+
 	// Correct token -> connects AND can do JetStream (Setup + Register).
 	c, err := Connect(url, "", token)
 	if err != nil {

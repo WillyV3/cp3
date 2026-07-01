@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -80,14 +82,28 @@ type Client struct {
 }
 
 // ConnectFromEnv dials using NATS_URL (default nats://127.0.0.1:4222), NATS_CREDS
-// (a .creds file) and NATS_TOKEN — the single place auth is resolved from the
-// environment so every binary authenticates the same way.
+// (a .creds file) and a token — the single place auth is resolved so every
+// binary authenticates the same way. Token resolution: NATS_TOKEN env, then the
+// file named by NATS_TOKEN_FILE, then ~/.config/cp3/token. The file paths keep
+// the secret out of argv, JSON config, and dotfile-synced shell rc.
 func ConnectFromEnv() (*Client, error) {
 	url := os.Getenv("NATS_URL")
 	if url == "" {
 		url = "nats://127.0.0.1:4222"
 	}
-	return Connect(url, os.Getenv("NATS_CREDS"), os.Getenv("NATS_TOKEN"))
+	token := os.Getenv("NATS_TOKEN")
+	if token == "" {
+		path := os.Getenv("NATS_TOKEN_FILE")
+		if path == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				path = filepath.Join(home, ".config", "cp3", "token")
+			}
+		}
+		if b, err := os.ReadFile(path); err == nil {
+			token = strings.TrimSpace(string(b))
+		}
+	}
+	return Connect(url, os.Getenv("NATS_CREDS"), token)
 }
 
 // Connect dials NATS. creds is a path to a .creds file and token is a plain auth

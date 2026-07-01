@@ -72,23 +72,26 @@ func defaultMCPPath() string {
 
 func cmdSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
-	agent := fs.String("agent", "", "this session's peer name (required)")
+	agent := fs.String("agent", "", "fixed peer name (omit for per-session identity via CLAUDE_PEERS_AGENT / .claude-peers-agent)")
 	mcp := fs.String("mcp", defaultMCPPath(), "MCP config file to merge the claude-peers server into")
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
 	fs.Parse(args)
-	if *agent == "" {
-		fmt.Fprintln(os.Stderr, "setup: --agent <name> required")
-		os.Exit(2)
-	}
 	bin, err := exec.LookPath("cp3-mcp")
 	if err != nil {
 		bin = "cp3-mcp" // not on PATH yet; write the bare name, user installs it
 	}
-	// NATS_TOKEN is deliberately NOT written here — it's a secret; export it in
-	// the launch shell (cp3-mcp inherits it). Only non-secret config goes in the file.
+	// Secrets are deliberately NOT written here — the token resolves at runtime
+	// from NATS_TOKEN / NATS_TOKEN_FILE / ~/.config/cp3/token. And the agent
+	// name is usually per-session (env or .claude-peers-agent file), not baked
+	// into shared config where every session would collide on it.
+	env := map[string]any{"NATS_URL": *nats}
+	if *agent != "" {
+		env["CLAUDE_PEERS_AGENT"] = *agent
+	}
 	entry := map[string]any{
+		"type":    "stdio",
 		"command": bin,
-		"env":     map[string]any{"NATS_URL": *nats, "CLAUDE_PEERS_AGENT": *agent},
+		"env":     env,
 	}
 	changed, err := mergeMCPServer(*mcp, "claude-peers", entry)
 	if err != nil {
@@ -101,10 +104,9 @@ func cmdSetup(args []string) {
 		fmt.Printf("claude-peers already configured in %s (no change)\n", *mcp)
 	}
 	fmt.Println()
-	fmt.Println("Launch Claude on the v3 network:")
-	fmt.Println("  export NATS_TOKEN=...           # the shared fleet token (secret; not written to config)")
-	fmt.Println("  cp3 run --as " + *agent + "     # execs claude with the peers dev-channel loaded")
-	fmt.Println("Retire v1 by removing its MCP server from the same file once you've cut over.")
+	fmt.Println("Token: put the fleet token in ~/.config/cp3/token (0600) — never in config/argv.")
+	fmt.Println("Launch: cp3 run --as <name>   (execs claude with the peers dev-channel loaded;")
+	fmt.Println("        or rely on a .claude-peers-agent file in the project dir)")
 }
 
 // cmdRun execs the real `claude` with the dev-channel flag injected. --as/--name
