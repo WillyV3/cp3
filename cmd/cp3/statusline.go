@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
+	peers "github.com/WillyV3/cp3"
 )
 
 // statusLine renders the one compact line a coding-agent statusline shows.

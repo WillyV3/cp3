@@ -1,4 +1,4 @@
-module github.com/WillyV3/claude-peers-v3
+module github.com/WillyV3/cp3
 
 go 1.25.6
 

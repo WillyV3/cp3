@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/WillyV3/claude-peers-v3/internal/boot"
+	"github.com/WillyV3/cp3/internal/boot"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 

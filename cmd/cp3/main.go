@@ -13,11 +13,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
-	"github.com/WillyV3/claude-peers-v3/internal/boot"
-	"github.com/WillyV3/claude-peers-v3/internal/bridge"
-	"github.com/WillyV3/claude-peers-v3/internal/mcp"
-	"github.com/WillyV3/claude-peers-v3/internal/opencode"
+	peers "github.com/WillyV3/cp3"
+	"github.com/WillyV3/cp3/internal/boot"
+	"github.com/WillyV3/cp3/internal/bridge"
+	"github.com/WillyV3/cp3/internal/mcp"
+	"github.com/WillyV3/cp3/internal/opencode"
 )
 
 func connect() *peers.Client {
@@ -28,6 +28,8 @@ func connect() *peers.Client {
 	}
 	return c
 }
+
+var version = "dev" // set by goreleaser ldflags
 
 func main() {
 	if len(os.Args) < 2 {
@@ -53,6 +55,8 @@ func main() {
 		cmdConsumers(os.Args[2:])
 	case "statusline":
 		cmdStatusLine(os.Args[2:])
+	case "version":
+		fmt.Println("cp3", version)
 	case "doctor":
 		cmdDoctor(os.Args[2:])
 	case "serve":
@@ -68,7 +72,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have

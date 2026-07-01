@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
-	"github.com/WillyV3/claude-peers-v3/internal/boot"
+	peers "github.com/WillyV3/cp3"
+	"github.com/WillyV3/cp3/internal/boot"
 )
 
 // ---- JSON-RPC transport (stdio) ----

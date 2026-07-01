@@ -1,6 +1,6 @@
 version: 2
 
-project_name: claude-peers-v3
+project_name: cp3
 
 before:
   hooks:
@@ -10,35 +10,22 @@ builds:
   - id: cp3
     main: ./cmd/cp3
     binary: cp3
-    env: [CGO_ENABLED=0]            # pure Go — nats.go, no cgo
+    env: [CGO_ENABLED=0] # pure Go — nats.go + embedded nats-server, no cgo
     goos: [darwin, linux]
     goarch: [amd64, arm64]
-    ldflags: [-s -w]
-  - id: cp3-mcp
-    main: ./cmd/cp3-mcp
-    binary: cp3-mcp
-    env: [CGO_ENABLED=0]
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-    ldflags: [-s -w]
-  - id: cp3-opencode
-    main: ./cmd/cp3-opencode
-    binary: cp3-opencode
-    env: [CGO_ENABLED=0]
-    goos: [darwin, linux]
-    goarch: [amd64, arm64]
-    ldflags: [-s -w]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [README.md, LICENSE, adapters/pi/peer.ts]
+    files: [README.md, LICENSE, adapters/pi/*]
 
 nfpms:
   - id: packages
-    package_name: claude-peers-v3
-    homepage: "https://github.com/WillyV3/claude-peers-v3"
-    description: "Cross-runtime peer network for coding agents — NATS-native, injects into live TUIs"
+    package_name: cp3
+    homepage: "https://github.com/WillyV3/cp3"
+    description: "Peer network for coding agents — one binary, embedded server, injects into live TUIs"
     maintainer: "WillyV3 <noreply@github.com>"
     license: "MIT"
     formats: [deb, rpm, apk, archlinux]
@@ -54,18 +41,16 @@ changelog:
     exclude: ["^docs:", "^test:", "^chore:"]
 
 brews:
-  - name: claude-peers-v3
+  - name: cp3
     repository:
       owner: WillyV3
       name: homebrew-tap
       branch: main
     directory: Formula
-    homepage: "https://github.com/WillyV3/claude-peers-v3"
-    description: "Cross-runtime peer network for coding agents — NATS-native, injects into live TUIs"
+    homepage: "https://github.com/WillyV3/cp3"
+    description: "Peer network for coding agents — one binary, embedded server, injects into live TUIs"
     license: "MIT"
     install: |
       bin.install "cp3"
-      bin.install "cp3-mcp"
-      bin.install "cp3-opencode"
     test: |
-      system "#{bin}/cp3", "peers"
+      system "#{bin}/cp3", "doctor"

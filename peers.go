@@ -28,8 +28,8 @@ const (
 	presenceTTL  = 30 * time.Second
 	maxMsgSize   = 64 * 1024
 	retentionAge = 7 * 24 * time.Hour
-	maxBytes     = 1 << 30         // 1GiB hard cap — drop oldest before disk fills
-	dupWindow    = 2 * time.Minute // server-side dedup: a re-published msg-id inside this window is ignored
+	maxBytes     = 1 << 30             // 1GiB hard cap — drop oldest before disk fills
+	dupWindow    = 2 * time.Minute     // server-side dedup: a re-published msg-id inside this window is ignored
 	inboxIdle    = 30 * 24 * time.Hour // reap an inbox consumer abandoned this long (dead agent name)
 )
 

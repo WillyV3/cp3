@@ -3,3 +3,4 @@
 /cp3-opencode
 nats-store/
 *.log
+dist/

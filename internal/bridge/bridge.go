@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
+	peers "github.com/WillyV3/cp3"
 )
 
 // Run registers p, heartbeats, and delivers inbound messages to inject until

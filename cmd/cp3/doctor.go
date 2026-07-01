@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
+	peers "github.com/WillyV3/cp3"
 )
 
 // cmdDoctor walks the setup chain in dependency order and says the one thing

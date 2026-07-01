@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
+	peers "github.com/WillyV3/cp3"
 )
 
 // Connect dials like peers.ConnectFromEnv, plus the lazy auto-serve: localhost

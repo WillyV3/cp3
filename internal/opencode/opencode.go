@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	peers "github.com/WillyV3/claude-peers-v3"
-	"github.com/WillyV3/claude-peers-v3/internal/bridge"
+	peers "github.com/WillyV3/cp3"
+	"github.com/WillyV3/cp3/internal/bridge"
 )
 
 func env(k, def string) string {

@@ -8,13 +8,13 @@ import (
 
 func TestSanitizeName(t *testing.T) {
 	cases := map[string]string{
-		"pith":              "pith",
-		"My App":            "my-app",
-		"foo.bar":           "foo-bar", // '.' would break peers.msg.<name> subjects
-		"weird*chars>here":  "weird-chars-here",
-		"  spaced  ":        "spaced",
-		"---":               "",
-		"UPPER_case-9":      "upper_case-9",
+		"pith":             "pith",
+		"My App":           "my-app",
+		"foo.bar":          "foo-bar", // '.' would break peers.msg.<name> subjects
+		"weird*chars>here": "weird-chars-here",
+		"  spaced  ":       "spaced",
+		"---":              "",
+		"UPPER_case-9":     "upper_case-9",
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // capped at 32
 	}
 	for in, want := range cases {
