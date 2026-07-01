@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +100,30 @@ func TestMergeBailsOnBadJSON(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != bad {
 		t.Fatal("file was modified despite parse error")
+	}
+}
+
+func TestAppendAgentsMD(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "AGENTS.md")
+	// create
+	if ch, err := appendAgentsMD(p); err != nil || !ch {
+		t.Fatalf("create: changed=%v err=%v", ch, err)
+	}
+	// idempotent
+	if ch, err := appendAgentsMD(p); err != nil || ch {
+		t.Fatalf("idempotent: changed=%v err=%v", ch, err)
+	}
+	// preserves surrounding content and replaces block in place
+	orig, _ := os.ReadFile(p)
+	if err := os.WriteFile(p, append([]byte("# mine\n\n"), append(orig, []byte("\ntail\n")...)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := appendAgentsMD(p); err != nil || ch {
+		t.Fatalf("replace-noop: changed=%v err=%v", ch, err)
+	}
+	b, _ := os.ReadFile(p)
+	s := string(b)
+	if !strings.HasPrefix(s, "# mine") || !strings.Contains(s, "tail") || strings.Count(s, agentsMarkerStart) != 1 {
+		t.Fatalf("surroundings mangled:\n%s", s)
 	}
 }

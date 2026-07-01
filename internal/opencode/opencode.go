@@ -62,7 +62,7 @@ func inject(ctx context.Context, session string, m peers.Message) error {
 		delivery = "steer"
 	}
 	body, _ := json.Marshal(map[string]any{
-		"prompt":   map[string]string{"text": fmt.Sprintf("[peer %s] %s", m.From, m.Content)},
+		"prompt":   map[string]string{"text": fmt.Sprintf("[peer message from %s — to reply, run: cp3 send --to %s \"...\"]\n%s", m.From, m.From, m.Content)},
 		"delivery": delivery,
 	})
 	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/api/session/"+session+"/prompt", bytes.NewReader(body))

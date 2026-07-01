@@ -219,6 +219,9 @@ func (s *server) pushLoop(ctx context.Context) {
 				"from_summary": from.Summary,
 				"from_cwd":     from.Cwd,
 				"sent_at":      time.UnixMilli(m.TS).Format(time.RFC3339),
+				// A naive session mid-context may have lost the init
+				// instructions — the notification itself carries the verb.
+				"how_to_reply": fmt.Sprintf("call send_message with to=%q", m.From),
 			},
 		})
 	})

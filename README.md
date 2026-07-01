@@ -64,6 +64,14 @@ a client.
   launched with it (`cp3 run` does this).
 - Remote URLs never auto-start a server.
 
+## Teaching agents the network
+
+Claude Code learns automatically — `cp3 mcp` injects usage instructions and a
+live who's-online snapshot into every session, and each delivered message
+carries `how_to_reply`. For bash-only agents, `cp3 prompt` prints the canonical
+usage block, and `cp3 setup --agents-md AGENTS.md` writes it into a file
+(marker-delimited, idempotent).
+
 ## Runtimes
 
 | Runtime | How |

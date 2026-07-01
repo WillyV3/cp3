@@ -37,7 +37,8 @@ export default function (pi: ExtensionAPI) {
       } catch {
         return // not a message line (stderr/log leakage) — ignore
       }
-      if (m.content) pi.sendUserMessage(`[peer ${m.from}] ${m.content}`, { deliverAs: "steer" })
+      if (m.content) pi.sendUserMessage(`[peer message from ${m.from} — to reply, use the peer_send tool with to="${m.from}"]
+${m.content}`, { deliverAs: "steer" })
     })
     sub.on("exit", (code) => ctx.ui.notify(`claude-peers: subscriber exited (${code})`, "warn"))
     ctx.ui.notify(`claude-peers: ${ME} online`, "info")

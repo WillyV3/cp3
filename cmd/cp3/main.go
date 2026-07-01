@@ -57,6 +57,8 @@ func main() {
 		cmdStatusLine(os.Args[2:])
 	case "version":
 		fmt.Println("cp3", version)
+	case "prompt":
+		cmdPrompt(os.Args[2:])
 	case "doctor":
 		cmdDoctor(os.Args[2:])
 	case "serve":
@@ -72,7 +74,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|prompt|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have

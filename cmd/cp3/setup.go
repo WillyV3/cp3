@@ -75,6 +75,7 @@ func cmdSetup(args []string) {
 	agent := fs.String("agent", "", "fixed peer name (omit for per-session identity via CLAUDE_PEERS_AGENT / .claude-peers-agent)")
 	mcp := fs.String("mcp", defaultMCPPath(), "MCP config file to merge the claude-peers server into")
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
+	agentsMD := fs.String("agents-md", "", "also write the agent usage block into this AGENTS.md (idempotent, marker-delimited)")
 	fs.Parse(args)
 	// The MCP entry points at THIS binary (`cp3 mcp`) by absolute path —
 	// os.Executable, not a PATH lookup, because Claude may launch from a shell
@@ -106,6 +107,18 @@ func cmdSetup(args []string) {
 		fmt.Printf("merged claude-peers MCP server into %s (backup at %s.bak)\n", *mcp, *mcp)
 	} else {
 		fmt.Printf("claude-peers already configured in %s (no change)\n", *mcp)
+	}
+	if *agentsMD != "" {
+		wrote, err := appendAgentsMD(*agentsMD)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "setup: agents-md:", err)
+			os.Exit(1)
+		}
+		if wrote {
+			fmt.Printf("wrote agent usage block into %s\n", *agentsMD)
+		} else {
+			fmt.Printf("agent usage block already current in %s\n", *agentsMD)
+		}
 	}
 	fmt.Println()
 	fmt.Println("Token: put the fleet token in ~/.config/cp3/token (0600) — never in config/argv.")
