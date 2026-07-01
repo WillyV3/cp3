@@ -93,7 +93,14 @@ func ConnectFromEnv() (*Client, error) {
 // Connect dials NATS. creds is a path to a .creds file and token is a plain auth
 // token; either may be "" (empty both = no auth). creds wins if both are set.
 func Connect(url, creds, token string) (*Client, error) {
-	var opts []nats.Option
+	// Reconnect forever with backoff so a NATS blip doesn't drop an agent off
+	// the network (matches the v1 broker's resilience). Deliberately NOT
+	// RetryOnFailedConnect: the INITIAL connect must fail fast on a bad token/URL
+	// so misconfig surfaces immediately instead of retrying silently.
+	opts := []nats.Option{
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+	}
 	switch {
 	case creds != "":
 		opts = append(opts, nats.UserCredentials(creds))
@@ -114,6 +121,10 @@ func Connect(url, creds, token string) (*Client, error) {
 
 // Close releases the connection.
 func (c *Client) Close() { c.nc.Close() }
+
+// NATS exposes the raw connection for advanced uses (e.g. the fleet-compat
+// projector publishing legacy fleet.* events). Prefer the typed methods.
+func (c *Client) NATS() *nats.Conn { return c.nc }
 
 // Setup ensures the PEERS stream (the log) and PEERS_PRESENCE KV exist.
 // Idempotent — safe to call on every start.
@@ -361,11 +372,17 @@ func (c *Client) Subscribe(ctx context.Context, agent string, h func(Message)) e
 	return nil
 }
 
-// Watch delivers every event on the log (the full-visibility firehose).
+// Watch delivers events on the log (the full-visibility firehose). If fromStart
+// is true it replays all retained history first, else only events after now.
 // Blocks until ctx is done; h is called for each envelope.
-func (c *Client) Watch(ctx context.Context, h func(Envelope)) error {
+func (c *Client) Watch(ctx context.Context, fromStart bool, h func(Envelope)) error {
+	policy := jetstream.DeliverNewPolicy
+	if fromStart {
+		policy = jetstream.DeliverAllPolicy
+	}
 	cons, err := c.js.OrderedConsumer(ctx, streamName, jetstream.OrderedConsumerConfig{
 		FilterSubjects: []string{subjectAll},
+		DeliverPolicy:  policy,
 	})
 	if err != nil {
 		return fmt.Errorf("ordered consumer: %w", err)

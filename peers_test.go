@@ -188,7 +188,7 @@ func TestFirehoseVisibility(t *testing.T) {
 
 	var mu sync.Mutex
 	seen := map[EventType]int{}
-	go c.Watch(ctx, func(e Envelope) {
+	go c.Watch(ctx, true, func(e Envelope) {
 		mu.Lock()
 		seen[e.Type]++
 		mu.Unlock()
