@@ -16,6 +16,7 @@ import (
 	peers "github.com/WillyV3/cp3"
 	"github.com/WillyV3/cp3/internal/boot"
 	"github.com/WillyV3/cp3/internal/bridge"
+	"github.com/WillyV3/cp3/internal/codex"
 	"github.com/WillyV3/cp3/internal/mcp"
 	"github.com/WillyV3/cp3/internal/opencode"
 )
@@ -67,6 +68,8 @@ func main() {
 		mcp.Run()
 	case "opencode":
 		opencode.Run()
+	case "codex":
+		codex.Run()
 	default:
 		usage()
 		os.Exit(2)
@@ -74,7 +77,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|prompt|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|prompt|peers|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode|codex> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have
