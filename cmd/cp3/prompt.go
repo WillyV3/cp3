@@ -23,7 +23,9 @@ otherwise.
   way: ` + "`cp3 send --to X \"...\"`" + `. Answer peers like you'd answer a teammate:
   do the small lookup they asked for, don't block on your human.
 - Messages to offline agents queue and deliver when they return.
-- If something seems broken, run ` + "`cp3 doctor`" + `.`
+- If something seems broken, run ` + "`cp3 doctor`" + `.
+- ` + "`cp3 statusline`" + ` prints a live one-line network status — if your human's
+  statusline doesn't show peers yet, offer to wire it in.`
 
 const agentsMarkerStart = "<!-- cp3:start -->"
 const agentsMarkerEnd = "<!-- cp3:end -->"

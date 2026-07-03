@@ -52,5 +52,9 @@ brews:
     license: "MIT"
     install: |
       bin.install "cp3"
+    caveats: |
+      Get started:  cp3 setup   (wires Claude Code MCP + statusline)
+      Tip: `cp3 statusline` prints a live peers segment — append it to a
+      custom statusline if you have one. `cp3 doctor` diagnoses anything.
     test: |
       system "#{bin}/cp3", "doctor"

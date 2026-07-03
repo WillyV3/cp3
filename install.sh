@@ -27,4 +27,6 @@ install -m 0755 "$tmp/cp3" "$BIN_DIR/cp3"
 
 echo "cp3 $version installed to $BIN_DIR/cp3"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "note: add $BIN_DIR to your PATH" ;; esac
-echo "next: cp3 setup   (wires Claude Code; a local network auto-starts on first use)"
+echo "next: cp3 setup   (wires Claude Code MCP + statusline; a local network auto-starts on first use)"
+echo "tip:  cp3 statusline prints a live peers segment — if you already have a custom"
+echo "      statusline, append its output to yours to see the network at a glance"
