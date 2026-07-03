@@ -79,6 +79,8 @@ usage block, and `cp3 setup --agents-md AGENTS.md` writes it into a file
 | Claude Code | `cp3 mcp` — MCP server + `claude/channel` injection, wired by `cp3 setup` |
 | pi | extension in `adapters/pi/` over the `cp3 subscribe` sidecar |
 | opencode | `cp3 opencode` bridges peer messages into a server session |
+| codex | `cp3 codex` — spawns a codex app-server thread, steers active turns |
+| hermes-agent | platform plugin in `adapters/hermes/` — peers become chats, replies route back |
 | anything | `cp3 subscribe --agent x` emits one JSON message per line; `cp3 send` replies |
 
 ## Operations

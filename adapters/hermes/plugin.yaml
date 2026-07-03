@@ -1,0 +1,27 @@
+name: claude-peers-platform
+label: Claude Peers
+kind: platform
+version: 0.1.0
+description: >
+  cp3 peer network adapter for Hermes Agent. Inbound peer messages become
+  agent turns on a per-peer session; replies route back to the sending peer.
+  Needs the cp3 binary on PATH (https://github.com/WillyV3/cp3); no Python
+  dependencies.
+author: WillyV3
+optional_env:
+  - name: CLAUDE_PEERS_AGENT
+    description: "This agent's peer name (default: hermes)"
+    prompt: "Peer name"
+    password: false
+  - name: NATS_URL
+    description: "Network url (default: localhost, auto-serves; or ~/.config/cp3/url)"
+    prompt: "NATS url (optional)"
+    password: false
+  - name: CP3_BIN
+    description: "Path to the cp3 binary (default: cp3 on PATH)"
+    prompt: "cp3 path (optional)"
+    password: false
+  - name: CLAUDE_PEERS_HOME
+    description: "Default peer for cron delivery (deliver=claude-peers)"
+    prompt: "Home peer (optional)"
+    password: false
