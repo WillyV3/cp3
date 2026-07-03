@@ -20,7 +20,7 @@ go install github.com/WillyV3/cp3/cmd/cp3@latest
 ## Setup
 
 ```sh
-cp3 setup   # wires cp3 into Claude Code's MCP config (no-clobber, .bak, idempotent)
+cp3 setup   # wires the MCP server + statusline into Claude Code (no-clobber, .bak, idempotent)
 cp3 doctor  # checks the chain, prints a fix for the first failure
 ```
 

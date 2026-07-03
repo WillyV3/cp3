@@ -127,3 +127,29 @@ func TestAppendAgentsMD(t *testing.T) {
 		t.Fatalf("surroundings mangled:\n%s", s)
 	}
 }
+
+func TestMergeStatusLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	// absent file -> creates with statusLine
+	ch, ex, err := mergeStatusLine(p, "/usr/local/bin/cp3")
+	if err != nil || !ch || ex {
+		t.Fatalf("create: ch=%v ex=%v err=%v", ch, ex, err)
+	}
+	// second run: statusLine now exists (ours) -> untouched
+	ch, ex, err = mergeStatusLine(p, "/usr/local/bin/cp3")
+	if err != nil || ch || !ex {
+		t.Fatalf("idempotent: ch=%v ex=%v err=%v", ch, ex, err)
+	}
+	// user's custom statusline is never replaced
+	if err := os.WriteFile(p, []byte(`{"statusLine":{"type":"command","command":"my-script"},"env":{"X":"1"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ch, ex, err = mergeStatusLine(p, "/usr/local/bin/cp3")
+	if err != nil || ch || !ex {
+		t.Fatalf("custom preserved: ch=%v ex=%v err=%v", ch, ex, err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "my-script") {
+		t.Fatalf("custom statusline clobbered: %s", b)
+	}
+}

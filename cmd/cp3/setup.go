@@ -70,11 +70,57 @@ func defaultMCPPath() string {
 	return filepath.Join(home, ".claude.json")
 }
 
+// mergeStatusLine sets Claude's statusLine to `cp3 statusline` ONLY when none
+// is configured — an existing statusline is the user's (possibly a custom
+// script) and is never touched. Same .bak + bail-on-bad-JSON discipline as
+// mergeMCPServer. Returns (changed, existing, err): existing=true means one
+// was already there and we left it alone.
+func mergeStatusLine(path, bin string) (changed, existing bool, err error) {
+	data, rerr := os.ReadFile(path)
+	exists := rerr == nil
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return false, false, fmt.Errorf("read %s: %w", path, rerr)
+	}
+	doc := map[string]any{}
+	if exists && len(data) > 0 {
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return false, false, fmt.Errorf("parse %s: %w (left untouched)", path, err)
+		}
+	}
+	if _, ok := doc["statusLine"]; ok {
+		return false, true, nil
+	}
+	doc["statusLine"] = map[string]any{
+		"type":    "command",
+		"command": bin + " statusline",
+		"padding": 0,
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return false, false, err
+	}
+	out = append(out, '\n')
+	if exists {
+		if err := os.WriteFile(path+".bak", data, 0o644); err != nil {
+			return false, false, fmt.Errorf("write %s.bak: %w", path, err)
+		}
+	} else if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, false, err
+	}
+	return true, false, os.WriteFile(path, out, 0o644)
+}
+
+func defaultSettingsPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "settings.json")
+}
+
 func cmdSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	agent := fs.String("agent", "", "fixed peer name (omit for per-session identity via CLAUDE_PEERS_AGENT / .claude-peers-agent)")
 	mcp := fs.String("mcp", defaultMCPPath(), "MCP config file to merge the claude-peers server into")
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
+	settings := fs.String("settings", defaultSettingsPath(), "Claude settings.json for the statusline (set only when none exists)")
 	agentsMD := fs.String("agents-md", "", "also write the agent usage block into this AGENTS.md (idempotent, marker-delimited)")
 	fs.Parse(args)
 	// The MCP entry points at THIS binary (`cp3 mcp`) by absolute path —
@@ -107,6 +153,15 @@ func cmdSetup(args []string) {
 		fmt.Printf("merged claude-peers MCP server into %s (backup at %s.bak)\n", *mcp, *mcp)
 	} else {
 		fmt.Printf("claude-peers already configured in %s (no change)\n", *mcp)
+	}
+	slChanged, slExisting, err := mergeStatusLine(*settings, bin)
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "setup: statusline:", err) // non-fatal: MCP wiring already done
+	case slChanged:
+		fmt.Printf("statusline set to `cp3 statusline` in %s\n", *settings)
+	case slExisting:
+		fmt.Printf("statusline: you already have one (untouched) — add `cp3 statusline` output to it if you want the peers segment\n")
 	}
 	if *agentsMD != "" {
 		wrote, err := appendAgentsMD(*agentsMD)
