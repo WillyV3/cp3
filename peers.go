@@ -277,6 +277,41 @@ func (c *Client) Claim(ctx context.Context, p Peer) (*Peer, error) {
 	return nil, c.Register(ctx, p)
 }
 
+// ClaimWithFallback claims p.Agent, falling back to a machine-qualified name
+// when another live session holds it: "astrobot" taken -> "astrobot-macbook1".
+// Deterministic and self-describing — unlike ordinal suffixes, the fallback
+// says WHERE the twin lives (the usual cause: the same synced project dir
+// open on two machines). If even that is taken (same dir twice on one
+// machine), a short session tag breaks the tie. Returns the Peer actually
+// registered.
+func (c *Client) ClaimWithFallback(ctx context.Context, p Peer) (Peer, error) {
+	holder, err := c.Claim(ctx, p)
+	if err == nil {
+		return p, nil
+	}
+	if !errors.Is(err, ErrNameTaken) {
+		return p, err
+	}
+	base := p.Agent
+	if m := SanitizeName(p.Machine); m != "" {
+		p.Agent = base + "-" + m
+		if _, err := c.Claim(ctx, p); err == nil {
+			return p, nil
+		} else if !errors.Is(err, ErrNameTaken) {
+			return p, err
+		}
+	}
+	tag := p.Session
+	if len(tag) > 4 {
+		tag = tag[:4]
+	}
+	p.Agent = base + "-" + SanitizeName(tag)
+	if _, err := c.Claim(ctx, p); err != nil {
+		return p, fmt.Errorf("all fallbacks for %q taken (holder: %s on %s): %w", base, holder.Session, holder.Machine, err)
+	}
+	return p, nil
+}
+
 // SetSummary updates an agent's presence summary (re-puts the KV record and
 // emits a presence event so consumers see the change).
 func (c *Client) SetSummary(ctx context.Context, agent, summary string) error {
@@ -300,8 +335,18 @@ func (c *Client) SetSummary(ctx context.Context, agent, summary string) error {
 	return c.publish(ctx, "peers.presence", EventPresence, agent, p)
 }
 
-// Heartbeat refreshes an agent's presence key so its TTL doesn't expire.
-func (c *Client) Heartbeat(ctx context.Context, agent string) error {
+// ErrNameLost is returned by Heartbeat when the name is now held by a
+// different session — e.g. this machine slept past the TTL and someone else
+// claimed it. The caller must stop heartbeating this name: fighting over the
+// key makes presence flap between machines and splits the durable inbox
+// across two live sessions.
+var ErrNameLost = errors.New("agent name now held by another session")
+
+// Heartbeat refreshes presence ONLY while this session still owns the name:
+// the record's session must match, and the write is a revision-CAS update so
+// a racing claim can't be silently overwritten. session "" skips the
+// ownership check (bare CLI use).
+func (c *Client) Heartbeat(ctx context.Context, agent, session string) error {
 	kv, err := c.kvBucket(ctx)
 	if err != nil {
 		return err
@@ -314,8 +359,18 @@ func (c *Client) Heartbeat(ctx context.Context, agent string) error {
 	if err := json.Unmarshal(entry.Value(), &p); err != nil {
 		return fmt.Errorf("unmarshal peer: %w", err)
 	}
+	if session != "" && p.Session != session {
+		return fmt.Errorf("%s held by session %s on %s: %w", agent, p.Session, p.Machine, ErrNameLost)
+	}
 	p.TS = nowMillis()
-	return c.putPresence(ctx, p)
+	val, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal peer: %w", err)
+	}
+	if _, err := kv.Update(ctx, agent, val, entry.Revision()); err != nil {
+		return fmt.Errorf("kv update %s (lost race): %w", agent, err)
+	}
+	return nil
 }
 
 // Deregister removes presence and emits a deregister event.

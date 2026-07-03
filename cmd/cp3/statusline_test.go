@@ -14,6 +14,7 @@ func TestStatusLine(t *testing.T) {
 		{Agent: "keeper", Cwd: "/w"},
 		{Agent: "jim", Cwd: "/w"},
 		{Agent: "far", Cwd: "/elsewhere"},
+		{Agent: "twin", Cwd: "/w", Machine: "macbook1"},
 	}
 	cases := []struct {
 		name, cwd string
@@ -25,9 +26,10 @@ func TestStatusLine(t *testing.T) {
 		{"", "/w", list, 0, nil, "○ peers: —"},
 		{"keeper", "/w", nil, 0, errors.New("boom"), "○ peers: down"},
 		{"ghost", "", list, 0, nil, "○ peers: ghost · not registered"},
-		{"keeper", "/elsewhere", list, 0, nil, "● peers: keeper · 3 online · ⚠ also here: far"},
-		{"keeper", "/solo", list, 0, nil, "● peers: keeper · 3 online"},
-		{"keeper", "/solo", list, 4, nil, "● peers: keeper · 3 online · ✉4"},
+		{"keeper", "/elsewhere", list, 0, nil, "● peers: keeper · 4 online · ⚠ also here: far"},
+		{"keeper", "/w", list, 0, nil, "● peers: keeper · 4 online · ⚠ also here: jim, twin@macbook1"},
+		{"keeper", "/solo", list, 0, nil, "● peers: keeper · 4 online"},
+		{"keeper", "/solo", list, 4, nil, "● peers: keeper · 4 online · ✉4"},
 	}
 	for _, c := range cases {
 		if got := statusLine(c.name, c.cwd, c.list, c.pending, c.err); got != c.want {

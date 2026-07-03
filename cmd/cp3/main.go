@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -90,6 +91,25 @@ func consumerVerdict(cs peers.ConsumerStatus, now time.Time) string {
 		return "STALE" // backlog piling up, nobody draining
 	default:
 		return "idle"
+	}
+}
+
+// heartbeatOrDie keeps presence fresh for a CLI holder (watch --as /
+// register). Losing the name to another session is fatal-loud: a silent
+// zombie holder is exactly the flapping bug this exists to prevent.
+func heartbeatOrDie(ctx context.Context, c *peers.Client, agent, session string) {
+	err := c.Heartbeat(ctx, agent, session)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, peers.ErrNameLost) {
+		fmt.Fprintln(os.Stderr, "fatal:", err)
+		os.Exit(1)
+	}
+	// expired/transient: best effort re-claim; loss stays fatal
+	if _, cerr := c.Claim(ctx, peers.Peer{Agent: agent, Session: session}); cerr != nil && errors.Is(cerr, peers.ErrNameTaken) {
+		fmt.Fprintln(os.Stderr, "fatal: name reclaimed by another session:", cerr)
+		os.Exit(1)
 	}
 }
 
@@ -233,7 +253,7 @@ func cmdWatch(args []string) {
 				case <-ctx.Done():
 					return
 				case <-tk.C:
-					c.Heartbeat(ctx, *as)
+					heartbeatOrDie(ctx, c, *as, p.Session)
 				}
 			}
 		}()
@@ -281,9 +301,7 @@ func cmdRegister(args []string) {
 			fmt.Printf("deregistered %s\n", *agent)
 			return
 		case <-ticker.C:
-			if err := c.Heartbeat(ctx, *agent); err != nil {
-				fmt.Fprintln(os.Stderr, "heartbeat:", err)
-			}
+			heartbeatOrDie(ctx, c, *agent, p.Session)
 		}
 	}
 }

@@ -97,28 +97,33 @@ func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source st
 	if p.Agent == "" {
 		return ""
 	}
-	holder, err := c.Claim(ctx, p)
-	if err == nil {
-		return p.Agent
+	// Explicit names (--as flag / env, human-typed at launch) are strict: a
+	// collision means ephemeral + loud, never a silent rename — messages
+	// addressed to that exact name must not route to an impostor.
+	if source == "flag" || source == "env" {
+		holder, err := c.Claim(ctx, p)
+		if err == nil {
+			return p.Agent
+		}
+		if errors.Is(err, peers.ErrNameTaken) {
+			fmt.Fprintf(os.Stderr, "[cp3-mcp] name %q held by session %s on %s; running ephemeral (pick another with --as or CLAUDE_PEERS_AGENT)\n",
+				p.Agent, holder.Session, holder.Machine)
+		} else {
+			fmt.Fprintln(os.Stderr, "[cp3-mcp] claim:", err)
+		}
+		return ""
 	}
-	if !errors.Is(err, peers.ErrNameTaken) {
+	// File/dir-derived names fall back to a machine-qualified twin — the
+	// common cause is the same synced project dir open on two machines.
+	actual, err := c.ClaimWithFallback(ctx, p)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] claim:", err)
 		return ""
 	}
-	if source == "default" {
-		base := p.Agent
-		for i := 2; i <= 5; i++ {
-			p.Agent = fmt.Sprintf("%s-%d", base, i)
-			if _, err := c.Claim(ctx, p); err == nil {
-				return p.Agent
-			}
-		}
-		fmt.Fprintf(os.Stderr, "[cp3-mcp] %s through %s-5 all taken; running ephemeral\n", base, base)
-		return ""
+	if actual.Agent != p.Agent {
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] name %q taken; running as %q\n", p.Agent, actual.Agent)
 	}
-	fmt.Fprintf(os.Stderr, "[cp3-mcp] name %q held by session %s on %s; running ephemeral (pick another with --as or CLAUDE_PEERS_AGENT)\n",
-		p.Agent, holder.Session, holder.Machine)
-	return ""
+	return actual.Agent
 }
 
 func env(k, def string) string {
@@ -137,6 +142,8 @@ type server struct {
 	machine string
 	cwd     string
 	session string
+
+	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
 
 	mu     sync.Mutex
 	unread []peers.Message // buffered for check_messages fallback
@@ -170,8 +177,10 @@ func Run() {
 	s.me = claimIdentity(ctx, c, s.peer(), source)
 
 	if s.me != "" {
+		pushCtx, pushCancel := context.WithCancel(ctx)
+		s.pushCancel = pushCancel
 		go s.heartbeat(ctx)
-		go s.pushLoop(ctx) // inject inbound peer messages into the live session
+		go s.pushLoop(pushCtx) // inject inbound peer messages into the live session
 	}
 
 	s.serve(ctx)
@@ -189,9 +198,40 @@ func (s *server) heartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tk.C:
-			s.c.Heartbeat(ctx, s.me)
+			err := s.c.Heartbeat(ctx, s.me, s.session)
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, peers.ErrNameLost) {
+				s.nameLost(err)
+				return
+			}
+			// Expired (machine slept past the TTL) or transient: reclaim.
+			if _, cerr := s.c.Claim(ctx, s.peer()); cerr != nil {
+				if errors.Is(cerr, peers.ErrNameTaken) {
+					s.nameLost(cerr)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] heartbeat %s: %v (reclaim: %v)\n", s.me, err, cerr)
+			}
 		}
 	}
+}
+
+// nameLost stops inbox consumption (two sessions draining one durable inbox
+// split the messages) and tells the live session in plain language.
+func (s *server) nameLost(cause error) {
+	if s.pushCancel != nil {
+		s.pushCancel()
+	}
+	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
+	s.t.notify("notifications/claude/channel", map[string]any{
+		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. To get a name back, tell your human to restart this session — it will re-claim automatically (with a machine-suffixed fallback if needed).", s.me, cause),
+		"meta": map[string]string{
+			"from_agent": "cp3",
+			"sent_at":    time.Now().Format(time.RFC3339),
+		},
+	})
 }
 
 // pushLoop subscribes the durable inbox and injects each message into the live

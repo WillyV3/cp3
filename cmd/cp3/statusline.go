@@ -40,7 +40,11 @@ func statusLine(name, cwd string, list []peers.Peer, pending uint64, err error) 
 		if p.Agent == name {
 			found = true
 		} else if cwd != "" && p.Cwd == cwd {
-			here = append(here, p.Agent)
+			label := p.Agent
+			if p.Machine != "" {
+				label += "@" + p.Machine // same path on another box = synced-dir twin
+			}
+			here = append(here, label)
 		}
 	}
 	var line string
