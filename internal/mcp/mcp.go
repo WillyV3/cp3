@@ -150,12 +150,13 @@ func env(k, def string) string {
 // ---- server state ----
 
 type server struct {
-	t       *transport
-	c       *peers.Client
-	me      string
-	machine string
-	cwd     string
-	session string
+	t          *transport
+	c          *peers.Client
+	me         string // claimed name; access via name()/setName()
+	configured string // what identity resolution wanted (drift target)
+	machine    string
+	cwd        string
+	session    string
 
 	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
 
@@ -186,15 +187,27 @@ func Run() {
 		cwd:     cwd,
 		session: env("CLAUDE_SESSION_ID", newSession()),
 	}
-	name, source := peers.ResolveIdentity(cwd, asFlag())
-	s.me = name
-	s.me = claimIdentity(ctx, c, s.peer(), source)
+	// Headless one-shots (claude -p from daemons/crons) must not become
+	// addressable residents: no claim, no presence, no register event — they
+	// can still send and list. The dispatcher sets CLAUDE_PEERS_EPHEMERAL=1.
+	if os.Getenv("CLAUDE_PEERS_EPHEMERAL") == "" {
+		name, source := peers.ResolveIdentity(cwd, asFlag())
+		s.configured = name
+		s.me = name
+		s.me = claimIdentity(ctx, c, s.peer(), source)
+	} else {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
+	}
 
 	if s.me != "" {
 		pushCtx, pushCancel := context.WithCancel(ctx)
 		s.pushCancel = pushCancel
+		go s.pushLoop(pushCtx, s.me) // inject inbound peer messages into the live session
+	}
+	if s.me != "" || s.configured != "" {
+		// Runs even when ephemeral: a session that WANTED a name keeps
+		// trying to pick it up as soon as it frees (zero-touch repair).
 		go s.heartbeat(ctx)
-		go s.pushLoop(pushCtx) // inject inbound peer messages into the live session
 	}
 
 	// Names release the moment the session ends — the TTL is only the crash
@@ -214,18 +227,68 @@ func Run() {
 
 // release deregisters this session's name (bounded; best effort).
 func (s *server) release() {
-	if s.me == "" {
+	if s.name() == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := s.c.Deregister(ctx, s.me); err != nil {
+	if err := s.c.Deregister(ctx, s.name()); err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] deregister:", err)
 	}
 }
 
+func (s *server) name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.me
+}
+
+func (s *server) setName(n string) {
+	s.mu.Lock()
+	s.me = n
+	s.mu.Unlock()
+}
+
+// tryReclaim is the zero-touch identity repair: while claimed ≠ configured,
+// each heartbeat tick tries the configured name; the moment it frees (old
+// holder released or expired) we take it, move the inbox, drop the suffix,
+// and tell the session. Claim is only-if-free + CAS heartbeats, so there is
+// no fight risk — just a quiet upgrade.
+func (s *server) tryReclaim(ctx context.Context) {
+	want := s.configured
+	cur := s.name()
+	if want == "" || cur == want {
+		return
+	}
+	p := peers.Peer{Agent: want, Machine: s.machine, Cwd: s.cwd, Session: s.session}
+	if _, err := s.c.Claim(ctx, p); err != nil {
+		return // still held; try again next tick
+	}
+	old := cur
+	s.setName(want)
+	if s.pushCancel != nil {
+		s.pushCancel() // stop draining inbox-<suffix>
+	}
+	pushCtx, cancel := context.WithCancel(ctx)
+	s.pushCancel = cancel
+	go s.pushLoop(pushCtx, want)
+	was := fmt.Sprintf("you were temporarily %q", old)
+	if old == "" {
+		was = "you had been running unnamed"
+	} else {
+		dctx, dcancel := context.WithTimeout(ctx, 2*time.Second)
+		s.c.Deregister(dctx, old)
+		dcancel()
+	}
+	fmt.Fprintf(os.Stderr, "[cp3-mcp] reclaimed %q (was %q)\n", want, old)
+	s.t.notify("notifications/claude/channel", map[string]any{
+		"content": fmt.Sprintf("Identity repaired: you are now %q (the name freed up; %s). No action needed.", want, was),
+		"meta":    map[string]string{"from_agent": "cp3", "sent_at": time.Now().Format(time.RFC3339)},
+	})
+}
+
 func (s *server) peer() peers.Peer {
-	return peers.Peer{Agent: s.me, Machine: s.machine, Cwd: s.cwd, Session: s.session}
+	return peers.Peer{Agent: s.name(), Machine: s.machine, Cwd: s.cwd, Session: s.session}
 }
 
 func (s *server) heartbeat(ctx context.Context) {
@@ -236,21 +299,26 @@ func (s *server) heartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tk.C:
-			err := s.c.Heartbeat(ctx, s.me, s.session)
+			s.tryReclaim(ctx)
+			cur := s.name()
+			if cur == "" {
+				continue // ephemeral: nothing to keep alive yet
+			}
+			err := s.c.Heartbeat(ctx, cur, s.session)
 			if err == nil {
 				continue
 			}
 			if errors.Is(err, peers.ErrNameLost) {
 				s.nameLost(err)
-				return
+				continue // stay in the loop: tryReclaim keeps working the repair
 			}
 			// Expired (machine slept past the TTL) or transient: reclaim.
 			if _, cerr := s.c.Claim(ctx, s.peer()); cerr != nil {
 				if errors.Is(cerr, peers.ErrNameTaken) {
 					s.nameLost(cerr)
-					return
+					continue
 				}
-				fmt.Fprintf(os.Stderr, "[cp3-mcp] heartbeat %s: %v (reclaim: %v)\n", s.me, err, cerr)
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] heartbeat %s: %v (reclaim: %v)\n", s.name(), err, cerr)
 			}
 		}
 	}
@@ -262,9 +330,10 @@ func (s *server) nameLost(cause error) {
 	if s.pushCancel != nil {
 		s.pushCancel()
 	}
+	s.setName("") // ephemeral until tryReclaim wins the name back
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
 	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. To get a name back, tell your human to restart this session — it will re-claim automatically (with a machine-suffixed fallback if needed).", s.me, cause),
+		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", s.me, cause),
 		"meta": map[string]string{
 			"from_agent": "cp3",
 			"sent_at":    time.Now().Format(time.RFC3339),
@@ -275,8 +344,8 @@ func (s *server) nameLost(cause error) {
 // pushLoop subscribes the durable inbox and injects each message into the live
 // Claude session as a channel notification (meta values MUST all be strings —
 // Claude Code silently drops notifications with non-string meta).
-func (s *server) pushLoop(ctx context.Context) {
-	s.c.Subscribe(ctx, s.me, func(m peers.Message) {
+func (s *server) pushLoop(ctx context.Context, name string) {
+	s.c.Subscribe(ctx, name, func(m peers.Message) {
 		s.mu.Lock()
 		s.unread = append(s.unread, m)
 		s.mu.Unlock()
@@ -415,7 +484,7 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			toolErr(s.t, id, "send_message requires 'to' and 'message'")
 			return
 		}
-		if err := s.c.Send(ctx, peers.Message{From: s.me, To: a.To, Content: a.Message, DeliverAs: "steer"}); err != nil {
+		if err := s.c.Send(ctx, peers.Message{From: s.name(), To: a.To, Content: a.Message, DeliverAs: "steer"}); err != nil {
 			toolErr(s.t, id, "send failed: %v", err)
 			return
 		}
@@ -424,11 +493,11 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 	case "set_summary":
 		var a struct{ Summary string }
 		json.Unmarshal(call.Args, &a)
-		if s.me == "" {
+		if s.name() == "" {
 			toolErr(s.t, id, "ephemeral session has no presence to summarize; start with --as=<name>")
 			return
 		}
-		if err := s.c.SetSummary(ctx, s.me, a.Summary); err != nil {
+		if err := s.c.SetSummary(ctx, s.name(), a.Summary); err != nil {
 			toolErr(s.t, id, "set_summary failed: %v", err)
 			return
 		}
@@ -465,11 +534,18 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			toolErr(s.t, id, "claim failed: %v", err)
 			return
 		}
-		s.mu.Lock()
-		s.me = a.Name
-		s.mu.Unlock()
-		go s.heartbeat(ctx)
-		go s.pushLoop(ctx)
+		wasEphemeral := s.name() == ""
+		s.setName(a.Name)
+		s.configured = a.Name
+		if s.pushCancel != nil {
+			s.pushCancel() // stop draining the old name's inbox
+		}
+		pushCtx, cancel := context.WithCancel(ctx)
+		s.pushCancel = cancel
+		go s.pushLoop(pushCtx, a.Name)
+		if wasEphemeral {
+			go s.heartbeat(ctx) // named for the first time: start presence upkeep
+		}
 		toolText(s.t, id, "Claimed agent name %q for this session.", a.Name)
 
 	default:
