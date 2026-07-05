@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	peers "github.com/WillyV3/cp3"
@@ -113,6 +115,18 @@ func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source st
 		}
 		return ""
 	}
+	// Brief retry before falling back: with release-on-close + CAS
+	// heartbeats, a held name during startup is usually a dying predecessor
+	// (reconnect race), gone within a couple seconds. A live legit holder
+	// costs us ~2s once, then we suffix.
+	for range 2 {
+		if _, err := c.Claim(ctx, p); err == nil {
+			return p.Agent
+		} else if !errors.Is(err, peers.ErrNameTaken) {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 	// File/dir-derived names fall back to a machine-qualified twin — the
 	// common cause is the same synced project dir open on two machines.
 	actual, err := c.ClaimWithFallback(ctx, p)
@@ -183,7 +197,31 @@ func Run() {
 		go s.pushLoop(pushCtx) // inject inbound peer messages into the live session
 	}
 
+	// Names release the moment the session ends — the TTL is only the crash
+	// backstop. Claude closing the MCP channel lands on the stdin-EOF path;
+	// a kill lands on the signal path. Either way a restart within the same
+	// second re-claims its own name instead of a -machine fallback.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		s.release()
+		os.Exit(0)
+	}()
 	s.serve(ctx)
+	s.release()
+}
+
+// release deregisters this session's name (bounded; best effort).
+func (s *server) release() {
+	if s.me == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.c.Deregister(ctx, s.me); err != nil {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] deregister:", err)
+	}
 }
 
 func (s *server) peer() peers.Peer {

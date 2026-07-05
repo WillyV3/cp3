@@ -25,12 +25,12 @@ func TestStatusLine(t *testing.T) {
 		err           error
 		want          string
 	}{
-		{"no identity", "", "", "/w", list, 0, nil, "○ peers: —"},
-		{"down", "keeper", "s-keeper", "/w", nil, 0, errors.New("boom"), "○ peers: down"},
-		{"not registered", "ghost", "s-ghost", "", list, 0, nil, "○ peers: ghost · not registered"},
-		{"co-location neutral", "keeper", "s-keeper", "/w", list, 0, nil, "● peers: keeper · 4 online · with: jim, twin@macbook1"},
-		{"solo", "keeper", "s-keeper", "/solo", list, 0, nil, "● peers: keeper · 4 online"},
-		{"pending badge", "keeper", "s-keeper", "/solo", list, 4, nil, "● peers: keeper · 4 online · ✉4"},
+		{"no identity", "", "", "/w", list, 0, nil, ""},
+		{"down", "keeper", "s-keeper", "/w", nil, 0, errors.New("boom"), "○ peers down"},
+		{"not registered", "ghost", "s-ghost", "", list, 0, nil, "○ ghost · not registered"},
+		{"co-location neutral", "keeper", "s-keeper", "/w", list, 0, nil, "● keeper · 4 peers · with jim, twin@macbook1"},
+		{"solo", "keeper", "s-keeper", "/solo", list, 0, nil, "● keeper · 4 peers"},
+		{"pending badge", "keeper", "s-keeper", "/solo", list, 4, nil, "● keeper · 4 peers · ✉4"},
 		// jim's bug: configured "jim" but THIS session claimed "jim-omarchy"
 		// (stale "jim" from the previous session still in presence). Must
 		// show the claimed name, warn about the drift, and NOT list either
@@ -41,7 +41,7 @@ func TestStatusLine(t *testing.T) {
 				{Agent: "jim-omarchy", Cwd: "/w", Machine: "omarchy", Session: "s-new"}, // me
 				{Agent: "keeper", Cwd: "/w", Session: "s-keeper"},
 			}, 0, nil,
-			"● peers: jim-omarchy · 3 online · ⚠ wanted: jim · with: jim, keeper"},
+			"● jim-omarchy · 3 peers · ⚠ wanted jim · with jim, keeper"},
 	}
 	for _, c := range cases {
 		if got := statusLine(c.conf, c.session, c.cwd, c.list, c.pending, c.err); got != c.want {

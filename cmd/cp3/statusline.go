@@ -22,17 +22,19 @@ import (
 // identity drift is the one thing worth a ⚠. Co-located peers are neutral
 // info ("with: x"), not a warning — agents may share a directory on purpose.
 //
-//	no identity     -> dim  "○ peers: —"
-//	fetch error     -> red  "○ peers: down"
-//	not registered  -> yell "○ peers: <configured> · not registered"
-//	registered      -> green"● peers: <claimed> · <N> online"
-//	claimed drifted -> ...  " · ⚠ wanted: <configured>"
-//	undrained inbox -> ...  " · ✉N"
-//	co-located      -> dim  " · with: a@machine, b"
+// Quiet when normal, loud only when abnormal (ANSI 0-15 throughout):
+//
+//	no identity     -> ""   (wrappers hide the empty segment)
+//	fetch error     -> red  "○ peers down"
+//	not registered  -> yell "○ <configured> · not registered"
+//	registered      -> green"● <claimed> · <N> peers"   (the quiet normal)
+//	claimed drifted -> yell " · ⚠ wanted <configured>"
+//	undrained inbox -> yell " · ✉N"
+//	co-located      -> soft " · with a@machine, b"  (yellow names, not a fault)
 func statusLine(configured, session, cwd string, list []peers.Peer, pending uint64, err error) string {
 	const on = true
 	if err != nil {
-		return paint(on, cRed, "○ peers: down")
+		return paint(on, cRed, "○ peers down")
 	}
 	var self *peers.Peer
 	for i := range list {
@@ -54,7 +56,7 @@ func statusLine(configured, session, cwd string, list []peers.Peer, pending uint
 		shown = self.Agent
 	}
 	if shown == "" {
-		return paint(on, cDim, "○ peers: —")
+		return "" // no identity: emit nothing, wrappers hide the empty segment
 	}
 
 	var with []string
@@ -74,19 +76,20 @@ func statusLine(configured, session, cwd string, list []peers.Peer, pending uint
 
 	var line string
 	if self == nil {
-		line = paint(on, cYellow, "○") + " peers: " + paint(on, cDim, shown+" · not registered")
+		line = paint(on, cYellow, "○") + " " + paint(on, cBold, shown) + paint(on, cDim, " · not registered")
 	} else {
-		line = paint(on, cGreen, "●") + " peers: " + paint(on, cBold, shown) +
-			paint(on, cDim, " · ") + paint(on, cCyan, fmt.Sprintf("%d online", len(list)))
+		line = paint(on, cGreen, "●") + " " + paint(on, cBold, shown) +
+			paint(on, cDim, fmt.Sprintf(" · %d peers", len(list)))
 		if configured != "" && shown != configured {
-			line += paint(on, cDim, " · ") + paint(on, cYellow, "⚠ wanted: "+configured)
+			line += paint(on, cDim, " · ") + paint(on, cYellow, "⚠ wanted "+configured)
 		}
 	}
 	if pending > 0 {
 		line += paint(on, cDim, " · ") + paint(on, cYellow, fmt.Sprintf("✉%d", pending))
 	}
 	if len(with) > 0 {
-		line += paint(on, cDim, " · with: "+strings.Join(with, ", "))
+		// Soft yellow noticing aid — co-location is legitimate, just worth seeing.
+		line += paint(on, cDim, " · with ") + paint(on, cYellow, strings.Join(with, ", "))
 	}
 	return line
 }
