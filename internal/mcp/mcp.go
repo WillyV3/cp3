@@ -158,6 +158,7 @@ type server struct {
 	cwd        string
 	session    string
 
+	parentPID  int                // the claude process; keys the statusline state file
 	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
 
 	mu     sync.Mutex
@@ -187,6 +188,7 @@ func Run() {
 		cwd:     cwd,
 		session: env("CLAUDE_SESSION_ID", newSession()),
 	}
+	s.parentPID = os.Getppid()
 	// Headless one-shots (claude -p from daemons/crons) must not become
 	// addressable residents: no claim, no presence, no register event — they
 	// can still send and list. The dispatcher sets CLAUDE_PEERS_EPHEMERAL=1.
@@ -198,6 +200,7 @@ func Run() {
 	} else {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
 	}
+	s.writeState() // statusline reads identity by claude-pid, not by cwd
 
 	if s.me != "" {
 		pushCtx, pushCancel := context.WithCancel(ctx)
@@ -227,6 +230,7 @@ func Run() {
 
 // release deregisters this session's name (bounded; best effort).
 func (s *server) release() {
+	s.removeState()
 	if s.name() == "" {
 		return
 	}
@@ -280,6 +284,7 @@ func (s *server) tryReclaim(ctx context.Context) {
 		s.c.Deregister(dctx, old)
 		dcancel()
 	}
+	s.writeState()
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] reclaimed %q (was %q)\n", want, old)
 	s.t.notify("notifications/claude/channel", map[string]any{
 		"content": fmt.Sprintf("Identity repaired: you are now %q (the name freed up; %s). No action needed.", want, was),
@@ -331,6 +336,7 @@ func (s *server) nameLost(cause error) {
 		s.pushCancel()
 	}
 	s.setName("") // ephemeral until tryReclaim wins the name back
+	s.writeState()
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
 	s.t.notify("notifications/claude/channel", map[string]any{
 		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", s.me, cause),
@@ -546,6 +552,7 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 		if wasEphemeral {
 			go s.heartbeat(ctx) // named for the first time: start presence upkeep
 		}
+		s.writeState()
 		toolText(s.t, id, "Claimed agent name %q for this session.", a.Name)
 
 	default:

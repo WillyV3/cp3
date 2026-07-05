@@ -11,6 +11,7 @@ import (
 	"time"
 
 	peers "github.com/WillyV3/cp3"
+	"github.com/WillyV3/cp3/internal/mcp"
 )
 
 // statusLine renders the one compact line a coding-agent statusline shows.
@@ -31,19 +32,25 @@ import (
 //	claimed drifted -> yell " · ⚠ wanted <configured>"
 //	undrained inbox -> yell " · ✉N"
 //	co-located      -> soft " · with a@machine, b"  (yellow names, not a fault)
-func statusLine(configured, session, cwd string, list []peers.Peer, pending uint64, err error) string {
+func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pending uint64, err error) string {
 	const on = true
 	if err != nil {
 		return paint(on, cRed, "○ peers down")
 	}
 	var self *peers.Peer
 	for i := range list {
+		// The session's own MCP state (claimed) is the strongest key, then
+		// the session id, and only then the configured-name guess.
+		if claimed != "" && list[i].Agent == claimed {
+			self = &list[i]
+			break
+		}
 		if session != "" && list[i].Session == session {
 			self = &list[i]
 			break
 		}
 	}
-	if self == nil && configured != "" {
+	if self == nil && claimed == "" && configured != "" {
 		for i := range list {
 			if list[i].Agent == configured {
 				self = &list[i]
@@ -52,6 +59,9 @@ func statusLine(configured, session, cwd string, list []peers.Peer, pending uint
 		}
 	}
 	shown := configured
+	if claimed != "" {
+		shown = claimed
+	}
 	if self != nil {
 		shown = self.Agent
 	}
@@ -114,6 +124,7 @@ func cmdStatusLine(args []string) {
 	fs.SetOutput(io.Discard) // swallow flag errors too
 	name := fs.String("name", "", "configured peer name (defaults to this dir's identity)")
 	session := fs.String("session", "", "this session's id (for self-recognition; default: stdin session_id)")
+	parent := fs.Int("parent", 0, "the claude process pid (wrappers pass $PPID; default: our own parent)")
 	_ = fs.Parse(args)
 	stdin := readStdin()
 	sid := *session
@@ -126,13 +137,26 @@ func cmdStatusLine(args []string) {
 		}
 	}
 	cwd, _ := os.Getwd()
-	configured, _ := peers.ResolveIdentity(cwd, *name)
+	// Identity is SESSION-bound, not directory-bound: the session's MCP server
+	// records {claimed, wanted} keyed by the claude pid, and that beats
+	// re-resolving from whatever directory the session has wandered into.
+	// cwd-based resolution remains only for non-session contexts (no state file).
+	ppid := *parent
+	if ppid == 0 {
+		ppid = os.Getppid()
+	}
+	st := mcp.ReadState(ppid)
+	configured := st.Wanted
+	claimed := st.Claimed
+	if configured == "" && claimed == "" {
+		configured, _ = peers.ResolveIdentity(cwd, *name)
+	}
 
 	done := make(chan string, 1)
 	go func() {
 		c, err := peers.ConnectFromEnv()
 		if err != nil {
-			done <- statusLine(configured, sid, cwd, nil, 0, err)
+			done <- statusLine(configured, claimed, sid, cwd, nil, 0, err)
 			return
 		}
 		defer c.Close()
@@ -142,7 +166,9 @@ func cmdStatusLine(args []string) {
 		// Pending tracks the name we actually display (claimed beats
 		// configured), so the badge follows the real inbox.
 		shown := configured
-		if sid != "" {
+		if claimed != "" {
+			shown = claimed
+		} else if sid != "" {
 			for _, p := range list {
 				if p.Session == sid {
 					shown = p.Agent
@@ -160,12 +186,12 @@ func cmdStatusLine(args []string) {
 				}
 			}
 		}
-		done <- statusLine(configured, sid, cwd, list, pending, err)
+		done <- statusLine(configured, claimed, sid, cwd, list, pending, err)
 	}()
 	select {
 	case line := <-done:
 		fmt.Println(line)
 	case <-time.After(700 * time.Millisecond):
-		fmt.Println(statusLine(configured, sid, cwd, nil, 0, context.DeadlineExceeded))
+		fmt.Println(statusLine(configured, claimed, sid, cwd, nil, 0, context.DeadlineExceeded))
 	}
 }
