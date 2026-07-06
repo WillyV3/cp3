@@ -193,10 +193,32 @@ func Run() {
 	// addressable residents: no claim, no presence, no register event — they
 	// can still send and list. The dispatcher sets CLAUDE_PEERS_EPHEMERAL=1.
 	if os.Getenv("CLAUDE_PEERS_EPHEMERAL") == "" {
-		name, source := peers.ResolveIdentity(cwd, asFlag())
-		s.configured = name
-		s.me = name
-		s.me = claimIdentity(ctx, c, s.peer(), source)
+		// Session continuity beats directory discovery: if THIS Claude
+		// session already had an identity (state file survives MCP
+		// reconnects — same claude pid), take it back. Without this, an
+		// MCP restart re-reads the dir file, and in syncthing-shared dirs
+		// that file may name a DIFFERENT machine's agent — the root of the
+		// astrobot/sontara-mobile involuntary-rename incident.
+		if st := ReadState(s.parentPID); st.Claimed != "" || st.Wanted != "" {
+			s.configured = st.Wanted
+			prev := st.Claimed
+			if prev == "" {
+				prev = st.Wanted
+			}
+			p := s.peer()
+			p.Agent = prev
+			if _, err := c.Claim(ctx, p); err == nil {
+				s.me = prev
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] resumed session identity %q\n", prev)
+			} else {
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] session identity %q not reclaimable (%v); ephemeral until it frees\n", prev, err)
+			}
+		} else {
+			name, source := peers.ResolveIdentity(cwd, asFlag())
+			s.configured = name
+			s.me = name
+			s.me = claimIdentity(ctx, c, s.peer(), source)
+		}
 	} else {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
 	}
@@ -228,9 +250,10 @@ func Run() {
 	s.release()
 }
 
-// release deregisters this session's name (bounded; best effort).
+// release deregisters this session's name (bounded; best effort). The state
+// file deliberately SURVIVES: /mcp reconnect SIGTERMs this process while the
+// claude session lives on, and the successor MCP resumes identity from it.
 func (s *server) release() {
-	s.removeState()
 	if s.name() == "" {
 		return
 	}

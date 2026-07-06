@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // sessionState is what the statusline needs to render THIS session truthfully:
@@ -58,10 +59,25 @@ func (s *server) writeState() {
 	os.MkdirAll(filepath.Dir(p), 0o700)
 	b, _ := json.Marshal(sessionState{Claimed: s.name(), Wanted: s.configured})
 	os.WriteFile(p, b, 0o600)
+	pruneStale(filepath.Dir(p))
 }
 
-func (s *server) removeState() {
-	if p := StatePath(s.parentPID); p != "" {
-		os.Remove(p)
+// pruneStale drops state files older than a week — files outlive their MCP
+// process on purpose (reconnect continuity) but not forever (pid reuse).
+var (
+	timeNow  = time.Now
+	timeHour = time.Hour
+)
+
+func pruneStale(dir string) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := timeNow().Add(-7 * 24 * timeHour)
+	for _, e := range ents {
+		if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
 	}
 }
