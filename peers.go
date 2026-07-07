@@ -100,6 +100,13 @@ func ConnectFromEnv() (*Client, error) {
 	return Connect(url, os.Getenv("NATS_CREDS"), token)
 }
 
+// OnReconnect registers f to run each time the underlying NATS connection is
+// re-established (laptop wake, server bounce). Presence holders use it to
+// re-claim immediately instead of waiting for the next heartbeat tick.
+func (c *Client) OnReconnect(f func()) {
+	c.nc.SetReconnectHandler(func(*nats.Conn) { f() })
+}
+
 // URLFromEnv resolves the server url the same way ConnectFromEnv does:
 // NATS_URL env, then ~/.config/cp3/url, then localhost.
 func URLFromEnv() string {

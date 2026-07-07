@@ -235,6 +235,20 @@ func Run() {
 		go s.heartbeat(ctx)
 	}
 
+	// Laptop wake / server bounce: re-assert presence the moment the
+	// connection returns — the statusline blip shrinks from "next 15s tick
+	// after tailscale recovers" to effectively zero.
+	c.OnReconnect(func() {
+		if n := s.name(); n != "" {
+			rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
+			defer rcancel()
+			if _, err := s.c.Claim(rctx, s.peer()); err == nil {
+				s.writeState()
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] reconnected, presence re-asserted for %q\n", n)
+			}
+		}
+	})
+
 	// Names release the moment the session ends — the TTL is only the crash
 	// backstop. Claude closing the MCP channel lands on the stdin-EOF path;
 	// a kill lands on the signal path. Either way a restart within the same
