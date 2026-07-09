@@ -334,13 +334,33 @@ func (s *server) peer() peers.Peer {
 }
 
 func (s *server) heartbeat(ctx context.Context) {
-	tk := time.NewTicker(15 * time.Second)
+	const interval = 15 * time.Second
+	tk := time.NewTicker(interval)
 	defer tk.Stop()
+	// Wall clock with the monotonic reading stripped: macOS suspends the
+	// monotonic clock during sleep, so only the wall clock reveals a sleep gap.
+	last := time.Now().Round(0)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tk.C:
+			// Sleep recovery: if more than ~the presence TTL (2 ticks) of
+			// wall-clock time elapsed since the last tick, the machine slept
+			// long enough to expire our presence key. The loopback socket can
+			// stay TCP-ESTABLISHED while the server-side session went stale, so
+			// heartbeats and reclaims silently fail and the expired key never
+			// comes back. Force a reconnect so OnReconnect rebuilds the session
+			// and re-Claims the name.
+			now := time.Now().Round(0)
+			slept := now.Sub(last) > 2*interval
+			last = now
+			if slept {
+				if err := s.c.ForceReconnect(); err != nil {
+					fmt.Fprintf(os.Stderr, "[cp3-mcp] woke, force-reconnect: %v\n", err)
+				}
+				continue // OnReconnect re-Claims on the fresh session
+			}
 			s.tryReclaim(ctx)
 			cur := s.name()
 			if cur == "" {
@@ -360,7 +380,11 @@ func (s *server) heartbeat(ctx context.Context) {
 					s.nameLost(cerr)
 					continue
 				}
-				fmt.Fprintf(os.Stderr, "[cp3-mcp] heartbeat %s: %v (reclaim: %v)\n", s.name(), err, cerr)
+				// Reclaim failed too: the connection is likely stale (a sleep
+				// that didn't trip the gap check, or a NATS blip). Force a
+				// reconnect so the next tick works on a fresh session.
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] heartbeat %s: %v (reclaim: %v) — forcing reconnect\n", s.name(), err, cerr)
+				_ = s.c.ForceReconnect()
 			}
 		}
 	}
