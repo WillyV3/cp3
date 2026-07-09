@@ -464,6 +464,12 @@ func (c *Client) Send(ctx context.Context, m Message) error {
 	if m.TS == 0 {
 		m.TS = nowMillis()
 	}
+	// Sanitize the recipient the same way names are sanitized at registration
+	// (ResolveIdentity -> SanitizeName): names are lowercased NATS subject
+	// tokens. Without this, a message to "GLM" publishes to peers.msg.GLM while
+	// that agent's inbox listens on peers.msg.glm, so it is silently lost.
+	// Normalizing here makes addressing case-insensitive and symmetric.
+	m.To = SanitizeName(m.To)
 	return c.publish(ctx, "peers.msg."+m.To, EventMessage, m.From, m)
 }
 
