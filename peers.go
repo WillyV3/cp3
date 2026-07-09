@@ -168,6 +168,14 @@ func (c *Client) Close() { c.nc.Close() }
 // projector publishing legacy fleet.* events). Prefer the typed methods.
 func (c *Client) NATS() *nats.Conn { return c.nc }
 
+// ForceReconnect tears down the current NATS connection and dials a fresh one,
+// firing the reconnect handler (see OnReconnect) on success. After a laptop
+// sleep the loopback socket can stay TCP-ESTABLISHED while the server-side
+// session is stale, so JetStream ops (heartbeat, KV puts) silently fail and a
+// presence key that expired during sleep never gets re-registered. Forcing a
+// reconnect rebuilds the session so OnReconnect can re-Claim the name.
+func (c *Client) ForceReconnect() error { return c.nc.ForceReconnect() }
+
 // Setup ensures the PEERS stream (the log) and PEERS_PRESENCE KV exist.
 // Idempotent — safe to call on every start.
 func (c *Client) Setup(ctx context.Context) error {
