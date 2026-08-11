@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	peers "github.com/WillyV3/cp3"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 func TestStatusLine(t *testing.T) {
@@ -98,4 +100,79 @@ func TestConsumerVerdict(t *testing.T) {
 			t.Errorf("case %d: got %q want %q", i, got, c.want)
 		}
 	}
+}
+
+// waitFor is the anti-`sleep 10` primitive: it must return as soon as the
+// agent shows up, and fail cleanly (not hang) when it never does.
+func TestWaitFor(t *testing.T) {
+	s := runTestServer(t)
+	c := newTestClient(t, s)
+	ctx := context.Background()
+
+	// Already present -> returns immediately.
+	if err := c.Register(ctx, peers.Peer{Agent: "early", Machine: "m1", Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got, err := waitFor(c, "early", 5*time.Second)
+	if err != nil || got.Machine != "m1" {
+		t.Fatalf("already-present: %v %+v", err, got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("already-present took %s, should be instant", elapsed)
+	}
+
+	// Registers late -> returns once it lands, well before the timeout.
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		c.Register(ctx, peers.Peer{Agent: "late", Machine: "m2", Session: "s2"})
+	}()
+	start = time.Now()
+	if got, err = waitFor(c, "late", 15*time.Second); err != nil || got.Machine != "m2" {
+		t.Fatalf("late-arrival: %v %+v", err, got)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("late-arrival took %s — not returning promptly", elapsed)
+	}
+
+	// Never registers -> times out with an error, does not hang.
+	start = time.Now()
+	if _, err = waitFor(c, "ghost", 2*time.Second); err == nil {
+		t.Fatal("expected timeout error for an agent that never registers")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("timeout overran: %s", elapsed)
+	}
+}
+
+// --- embedded JetStream helpers (main package copy; the root package's are
+// unexported to it) ---
+
+func runTestServer(t *testing.T) *natsserver.Server {
+	t.Helper()
+	s, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(10 * time.Second) {
+		t.Fatal("server not ready")
+	}
+	t.Cleanup(s.Shutdown)
+	return s
+}
+
+func newTestClient(t *testing.T, s *natsserver.Server) *peers.Client {
+	t.Helper()
+	c, err := peers.Connect(s.ClientURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	if err := c.Setup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

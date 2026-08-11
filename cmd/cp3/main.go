@@ -203,11 +203,48 @@ func cmdSend(args []string) {
 	fmt.Printf("sent %s -> %s\n", *from, *to)
 }
 
+// waitFor blocks until agent appears in presence. Spawning a peer is
+// asynchronous — tmux returns long before the session's MCP server finishes
+// its handshake and claims a name — so scripts otherwise guess with `sleep N`
+// and a guess that's too short reads as broken software. Polls the presence
+// KV (a tiny read) rather than watching: no extra machinery, and a poll can't
+// miss an agent that registered before we started looking.
+func waitFor(c *peers.Client, agent string, timeout time.Duration) (peers.Peer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		list, err := c.Peers(ctx)
+		if err == nil {
+			for _, p := range list {
+				if p.Agent == agent {
+					return p, nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return peers.Peer{}, fmt.Errorf("%s did not register within %s", agent, timeout)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 func cmdPeers(args []string) {
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
+	wait := fs.String("wait", "", "block until this agent registers; exit 0 when it does, non-zero on timeout")
+	timeout := fs.Duration("timeout", 30*time.Second, "how long --wait waits")
 	fs.Parse(args)
 	c := connect()
 	defer c.Close()
+	if *wait != "" {
+		p, err := waitFor(c, *wait, *timeout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "peers --wait:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s registered on %s (%s)\n", p.Agent, p.Machine, p.Cwd)
+		return
+	}
 	list, err := c.Peers(context.Background())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "peers:", err)
