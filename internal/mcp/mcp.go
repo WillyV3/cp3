@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -140,6 +142,16 @@ func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source st
 	return actual.Agent
 }
 
+// parentHasChannelFlag reports whether the launching Claude loaded dev
+// channels. ps (not /proc) so this works on macOS too.
+func parentHasChannelFlag(pid int) bool {
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return true // can't tell — don't cry wolf
+	}
+	return strings.Contains(string(out), "--dangerously-load-development-channels")
+}
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -159,6 +171,7 @@ type server struct {
 	session    string
 
 	parentPID  int                // the claude process; keys the statusline state file
+	noChannel  bool               // parent lacks the dev-channel flag: injection is a no-op
 	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
 
 	mu     sync.Mutex
@@ -189,6 +202,15 @@ func Run() {
 		session: env("CLAUDE_SESSION_ID", newSession()),
 	}
 	s.parentPID = os.Getppid()
+	// Claude Code discards channel notifications from third-party MCP servers
+	// unless launched with --dangerously-load-development-channels. It reports
+	// nothing when it does — messages arrive, get written, and vanish. Detect
+	// it from the parent's argv so the failure is loud instead of invisible.
+	s.noChannel = !parentHasChannelFlag(s.parentPID)
+	if s.noChannel {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] WARNING: this Claude was launched without --dangerously-load-development-channels;")
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] peer messages will be received and spooled but NEVER DISPLAYED. Relaunch with: cp3 run")
+	}
 	// Headless one-shots (claude -p from daemons/crons) must not become
 	// addressable residents: no claim, no presence, no register event — they
 	// can still send and list. The dispatcher sets CLAUDE_PEERS_EPHEMERAL=1.

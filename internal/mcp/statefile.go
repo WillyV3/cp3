@@ -17,6 +17,11 @@ import (
 type sessionState struct {
 	Claimed string `json:"claimed"`
 	Wanted  string `json:"wanted"`
+	// NoChannel is true when the parent Claude was launched WITHOUT
+	// --dangerously-load-development-channels: cp3 will deliver messages
+	// perfectly and Claude will silently discard every one. Surfaced in the
+	// statusline because nothing else reports it.
+	NoChannel bool `json:"noChannel,omitempty"`
 }
 
 func stateDir() string {
@@ -57,7 +62,7 @@ func (s *server) writeState() {
 		return
 	}
 	os.MkdirAll(filepath.Dir(p), 0o700)
-	b, _ := json.Marshal(sessionState{Claimed: s.name(), Wanted: s.configured})
+	b, _ := json.Marshal(sessionState{Claimed: s.name(), Wanted: s.configured, NoChannel: s.noChannel})
 	os.WriteFile(p, b, 0o600)
 	pruneStale(filepath.Dir(p))
 }

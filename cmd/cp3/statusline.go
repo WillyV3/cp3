@@ -32,7 +32,7 @@ import (
 //	claimed drifted -> yell " · ⚠ wanted <configured>"
 //	undrained inbox -> yell " · ✉N"
 //	co-located      -> soft " · with a@machine, b"  (yellow names, not a fault)
-func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pending uint64, err error) string {
+func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pending uint64, noChannel bool, err error) string {
 	const on = true
 	if err != nil {
 		return paint(on, cRed, "○ peers down")
@@ -93,6 +93,11 @@ func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pen
 		if configured != "" && shown != configured {
 			line += paint(on, cDim, " · ") + paint(on, cYellow, "⚠ wanted "+configured)
 		}
+	}
+	if noChannel {
+		// The one failure that looks completely healthy: presence green,
+		// messages arriving, nothing ever shown. Say so in the line itself.
+		line += paint(on, cDim, " · ") + paint(on, cRed, "✖ NO CHANNEL (relaunch: cp3 run)")
 	}
 	if pending > 0 {
 		line += paint(on, cDim, " · ") + paint(on, cYellow, fmt.Sprintf("✉%d", pending))
@@ -156,7 +161,7 @@ func cmdStatusLine(args []string) {
 	go func() {
 		c, err := peers.ConnectFromEnv()
 		if err != nil {
-			done <- statusLine(configured, claimed, sid, cwd, nil, 0, err)
+			done <- statusLine(configured, claimed, sid, cwd, nil, 0, st.NoChannel, err)
 			return
 		}
 		defer c.Close()
@@ -186,12 +191,12 @@ func cmdStatusLine(args []string) {
 				}
 			}
 		}
-		done <- statusLine(configured, claimed, sid, cwd, list, pending, err)
+		done <- statusLine(configured, claimed, sid, cwd, list, pending, st.NoChannel, err)
 	}()
 	select {
 	case line := <-done:
 		fmt.Println(line)
 	case <-time.After(700 * time.Millisecond):
-		fmt.Println(statusLine(configured, claimed, sid, cwd, nil, 0, context.DeadlineExceeded))
+		fmt.Println(statusLine(configured, claimed, sid, cwd, nil, 0, st.NoChannel, context.DeadlineExceeded))
 	}
 }

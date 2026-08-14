@@ -58,15 +58,25 @@ func TestStatusLine(t *testing.T) {
 			"● jim · 2 peers · with investigate"},
 	}
 	for _, c := range cases {
-		if got := statusLine(c.conf, c.claimed, c.session, c.cwd, c.list, c.pending, c.err); got != c.want {
+		if got := statusLine(c.conf, c.claimed, c.session, c.cwd, c.list, c.pending, false, c.err); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
 }
 
+func TestStatusLineNoChannel(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	list := []peers.Peer{{Agent: "rover", Cwd: "/r", Session: "s1"}}
+	got := statusLine("rover", "rover", "s1", "/r", list, 0, true, nil)
+	want := "● rover · 1 peers · ✖ NO CHANNEL (relaunch: cp3 run)"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
 func TestStatusLineHasColor(t *testing.T) {
 	// Without NO_COLOR the line must actually carry ANSI — the whole point.
-	got := statusLine("keeper", "keeper", "s1", "/w", []peers.Peer{{Agent: "keeper", Session: "s1"}}, 0, nil)
+	got := statusLine("keeper", "keeper", "s1", "/w", []peers.Peer{{Agent: "keeper", Session: "s1"}}, 0, false, nil)
 	if !containsANSI(got) {
 		t.Errorf("expected ANSI codes in %q", got)
 	}
