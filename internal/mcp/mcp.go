@@ -224,6 +224,27 @@ func Run() {
 	}
 	s.writeState() // statusline reads identity by claude-pid, not by cwd
 
+	// Replay anything a previous process received but never got in front of a
+	// human: rover's exact case — acked at 12:36 by a process that died, so a
+	// reconnect had nothing to replay from the stream. The spool has it.
+	// Drain the claimed name AND the configured one: a reconnect may land on a
+	// suffixed twin (rovertest -> rovertest-omarchy) while the spool sits under
+	// the name the sender actually addressed. Missing that orphans the message.
+	if n := s.me; n != "" {
+		missed := spoolDrain(n)
+		if s.configured != "" && s.configured != n {
+			missed = append(missed, spoolDrain(s.configured)...)
+		}
+		if len(missed) > 0 {
+			go func(ms []peers.Message) {
+				time.Sleep(2 * time.Second) // let the session finish initializing
+				for _, m := range ms {
+					s.notifyMessage(m, true)
+				}
+			}(missed)
+		}
+	}
+
 	if s.me != "" {
 		pushCtx, pushCancel := context.WithCancel(ctx)
 		s.pushCancel = pushCancel
@@ -322,6 +343,13 @@ func (s *server) tryReclaim(ctx context.Context) {
 		dcancel()
 	}
 	s.writeState()
+	if missed := spoolDrain(want); len(missed) > 0 {
+		go func(ms []peers.Message) {
+			for _, m := range ms {
+				s.notifyMessage(m, true)
+			}
+		}(missed)
+	}
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] reclaimed %q (was %q)\n", want, old)
 	s.t.notify("notifications/claude/channel", map[string]any{
 		"content": fmt.Sprintf("Identity repaired: you are now %q (the name freed up; %s). No action needed.", want, was),
@@ -389,31 +417,47 @@ func (s *server) nameLost(cause error) {
 // Claude Code silently drops notifications with non-string meta).
 func (s *server) pushLoop(ctx context.Context, name string) {
 	s.c.Subscribe(ctx, name, func(m peers.Message) {
+		// Durable FIRST: the notify below is fire-and-forget with no receipt,
+		// so a message must survive this process dying before it is seen.
+		spoolAppend(name, m)
 		s.mu.Lock()
 		s.unread = append(s.unread, m)
 		s.mu.Unlock()
 
-		var from peers.Peer
-		for _, p := range s.peersList(ctx) {
-			if p.Agent == m.From {
-				from = p
-				break
-			}
+		s.notifyMessage(m, false)
+	})
+}
+
+// notifyMessage injects one peer message into the live session. replay marks a
+// message a previous process received but never surfaced (spool replay), so
+// the agent knows why it is arriving late rather than treating it as new.
+func (s *server) notifyMessage(m peers.Message, replay bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var from peers.Peer
+	for _, p := range s.peersList(ctx) {
+		if p.Agent == m.From {
+			from = p
+			break
 		}
-		s.t.notify("notifications/claude/channel", map[string]any{
-			"content": m.Content,
-			"meta": map[string]string{
-				"message_id":   m.ID,
-				"from_agent":   m.From,
-				"from_machine": from.Machine,
-				"from_summary": from.Summary,
-				"from_cwd":     from.Cwd,
-				"sent_at":      time.UnixMilli(m.TS).Format(time.RFC3339),
-				// A naive session mid-context may have lost the init
-				// instructions — the notification itself carries the verb.
-				"how_to_reply": fmt.Sprintf("call send_message with to=%q", m.From),
-			},
-		})
+	}
+	content := m.Content
+	if replay {
+		content = "[delivered late — received while this session was restarting]\n" + content
+	}
+	s.t.notify("notifications/claude/channel", map[string]any{
+		"content": content,
+		"meta": map[string]string{
+			"message_id":   m.ID,
+			"from_agent":   m.From,
+			"from_machine": from.Machine,
+			"from_summary": from.Summary,
+			"from_cwd":     from.Cwd,
+			"sent_at":      time.UnixMilli(m.TS).Format(time.RFC3339),
+			// A naive session mid-context may have lost the init
+			// instructions — the notification itself carries the verb.
+			"how_to_reply": fmt.Sprintf("call send_message with to=%q", m.From),
+		},
 	})
 }
 
@@ -547,8 +591,19 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 		toolText(s.t, id, "Summary updated.")
 
 	case "check_messages":
+		// The spool is the durable record; the memory buffer only covers
+		// messages this process saw. Merge, dedup by id, clear both.
+		msgs := spoolDrain(s.name())
 		s.mu.Lock()
-		msgs := s.unread
+		seen := map[string]bool{}
+		for _, m := range msgs {
+			seen[m.ID] = true
+		}
+		for _, m := range s.unread {
+			if !seen[m.ID] {
+				msgs = append(msgs, m)
+			}
+		}
 		s.unread = nil
 		s.mu.Unlock()
 		if len(msgs) == 0 {
