@@ -28,9 +28,9 @@ const (
 	presenceTTL  = 30 * time.Second
 	maxMsgSize   = 64 * 1024
 	retentionAge = 7 * 24 * time.Hour
-	maxBytes     = 1 << 30             // 1GiB hard cap — drop oldest before disk fills
-	dupWindow    = 2 * time.Minute     // server-side dedup: a re-published msg-id inside this window is ignored
-	inboxIdle    = 30 * 24 * time.Hour // reap an inbox consumer abandoned this long (dead agent name)
+	maxBytes     = 1 << 30            // 1GiB hard cap — drop oldest before disk fills
+	dupWindow    = 2 * time.Minute    // server-side dedup: a re-published msg-id inside this window is ignored
+	inboxIdle    = 7 * 24 * time.Hour // reap an inbox abandoned this long; 30d let a graveyard accumulate (40 consumers / 12 peers)
 )
 
 // EventType is the closed set of event kinds on the log.
@@ -236,10 +236,37 @@ func (c *Client) publish(ctx context.Context, subject string, t EventType, actor
 	return nil
 }
 
+// ensureInbox creates (idempotently) the durable consumer that makes a name
+// reachable. One definition, shared by Register and Subscribe, so presence and
+// deliverability can never be created from two different shapes.
+func (c *Client) ensureInbox(ctx context.Context, agent string) (jetstream.Consumer, error) {
+	// Durable so messages sent while offline drain on reconnect;
+	// InactiveThreshold reaps a name abandoned for good.
+	cons, err := c.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+		Durable:           "inbox-" + agent,
+		FilterSubject:     "peers.msg." + agent,
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		InactiveThreshold: inboxIdle,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create inbox consumer: %w", err)
+	}
+	return cons, nil
+}
+
 // Register records presence in the KV and emits a register event.
+//
+// INVARIANT: on the roster means reachable. The inbox is created with the
+// presence record, never after it, because the alternative shipped: cp3
+// register published presence with no consumer, so every message to that name
+// landed in the log addressed to nobody while the sender was told "sent".
+// Presence without a mailbox is not a peer, it is a decoy.
 func (c *Client) Register(ctx context.Context, p Peer) error {
 	if p.TS == 0 {
 		p.TS = nowMillis()
+	}
+	if _, err := c.ensureInbox(ctx, p.Agent); err != nil {
+		return err
 	}
 	if err := c.putPresence(ctx, p); err != nil {
 		return err
@@ -431,6 +458,7 @@ type ConsumerStatus struct {
 	Name         string
 	Pending      uint64 // not yet delivered
 	AckPending   int    // delivered, unacked
+	Waiting      int    // outstanding pull requests: >0 means a session is attached right now
 	LastDelivery *time.Time
 }
 
@@ -443,7 +471,7 @@ func (c *Client) Consumers(ctx context.Context) ([]ConsumerStatus, error) {
 	var out []ConsumerStatus
 	lister := s.ListConsumers(ctx)
 	for info := range lister.Info() {
-		cs := ConsumerStatus{Name: info.Name, Pending: info.NumPending, AckPending: info.NumAckPending}
+		cs := ConsumerStatus{Name: info.Name, Pending: info.NumPending, AckPending: info.NumAckPending, Waiting: info.NumWaiting}
 		if info.Delivered.Last != nil {
 			t := *info.Delivered.Last
 			cs.LastDelivery = &t
@@ -456,15 +484,85 @@ func (c *Client) Consumers(ctx context.Context) ([]ConsumerStatus, error) {
 	return out, nil
 }
 
-// Send appends a message event to peers.msg.<to>.
-func (c *Client) Send(ctx context.Context, m Message) error {
+// DeliveryStatus is what actually happened to a sent message. Publishing
+// always "succeeds" — the log accepts the write regardless — so reporting that
+// as delivery is how a message can vanish while the sender is told it worked.
+// These are three different facts and callers must see which one they got.
+type DeliveryStatus string
+
+const (
+	// DeliveredLive: the recipient's inbox exists and a consumer is actively
+	// waiting on it — the message goes to a running session now.
+	DeliveredLive DeliveryStatus = "delivered"
+	// Queued: the inbox exists but nothing is draining it. The message waits
+	// durably and lands when that agent reconnects. This is the offline path
+	// working as designed, not a failure.
+	Queued DeliveryStatus = "queued"
+	// NoInbox: NOTHING will ever receive this. No durable consumer exists for
+	// the name, so the message sits in the log addressed to nobody. Presence
+	// can still list the agent (see cmdRegister), which is exactly how this
+	// stayed invisible.
+	NoInbox DeliveryStatus = "no-inbox"
+)
+
+// Human returns a one-line description suitable for a CLI or a tool result.
+func (d DeliveryStatus) Human(to string) string {
+	switch d {
+	case DeliveredLive:
+		return fmt.Sprintf("delivered to %s (live session consuming now)", to)
+	case Queued:
+		return fmt.Sprintf("queued for %s (inbox exists; delivers when that agent reconnects)", to)
+	default:
+		return fmt.Sprintf("NOT DELIVERED: %s has no inbox — nothing is subscribed to that name, so this message will never be read. Check `cp3 peers` for the exact name, or ask them to restart their session", to)
+	}
+}
+
+// DeleteInbox removes a durable inbox consumer. Callers must check it holds
+// no undelivered messages first — deleting a consumer discards its backlog.
+func (c *Client) DeleteInbox(ctx context.Context, name string) error {
+	return c.js.DeleteConsumer(ctx, streamName, name)
+}
+
+// Send appends a message event to peers.msg.<to> and reports what will
+// actually happen to it.
+func (c *Client) Send(ctx context.Context, m Message) (DeliveryStatus, error) {
 	if m.ID == "" {
 		m.ID = newID()
 	}
 	if m.TS == 0 {
 		m.TS = nowMillis()
 	}
-	return c.publish(ctx, "peers.msg."+m.To, EventMessage, m.From, m)
+	// Probe BEFORE publishing: after the write the consumer may have already
+	// picked it up, which would make a live agent look merely queued.
+	status := c.deliveryStatus(ctx, m.To)
+	if err := c.publish(ctx, "peers.msg."+m.To, EventMessage, m.From, m); err != nil {
+		return status, err
+	}
+	return status, nil
+}
+
+// deliveryStatus inspects the recipient's durable inbox. An error reading the
+// consumer is reported as Queued, not NoInbox — never claim a message is lost
+// on the strength of a failed lookup.
+func (c *Client) deliveryStatus(ctx context.Context, to string) DeliveryStatus {
+	cons, err := c.js.Consumer(ctx, streamName, "inbox-"+to)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrConsumerNotFound) {
+			return NoInbox
+		}
+		return Queued
+	}
+	info, err := cons.Info(ctx)
+	if err != nil {
+		return Queued
+	}
+	// NumWaiting counts outstanding pull requests: a session sitting on its
+	// inbox waiting for work. Zero means the consumer exists but nobody is
+	// draining it right now.
+	if info.NumWaiting > 0 {
+		return DeliveredLive
+	}
+	return Queued
 }
 
 // Subscribe delivers messages addressed to agent via a DURABLE consumer, so
@@ -474,14 +572,9 @@ func (c *Client) Subscribe(ctx context.Context, agent string, h func(Message)) e
 	// Durable so messages sent while offline drain on reconnect; InactiveThreshold
 	// reaps the consumer if the agent name is abandoned for good — no leaked
 	// consumers piling up on the server (the ephemeral-session snag).
-	cons, err := c.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Durable:           "inbox-" + agent,
-		FilterSubject:     "peers.msg." + agent,
-		AckPolicy:         jetstream.AckExplicitPolicy,
-		InactiveThreshold: inboxIdle,
-	})
+	cons, err := c.ensureInbox(ctx, agent)
 	if err != nil {
-		return fmt.Errorf("create inbox consumer: %w", err)
+		return err
 	}
 	cctx, err := cons.Consume(func(msg jetstream.Msg) {
 		var env Envelope

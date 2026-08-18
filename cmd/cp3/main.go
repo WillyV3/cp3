@@ -113,8 +113,27 @@ func heartbeatOrDie(ctx context.Context, c *peers.Client, agent, session string)
 	}
 }
 
+// reapable reports whether an inbox can be deleted without losing anything.
+// Three conditions, all required: nobody attached (Waiting==0), nothing
+// undelivered (Pending==0 — deleting a consumer discards its backlog, and
+// inbox-sontara-web sat on a real message for 307h), and quiet longer than
+// the age cutoff. Teardown is TTL-shaped on purpose: a durable inbox
+// outliving its session IS the offline-delivery feature, so exit-time
+// cleanup would delete the product.
+func reapable(cs peers.ConsumerStatus, now time.Time, olderThan time.Duration) bool {
+	if cs.Waiting > 0 || cs.Pending > 0 || cs.AckPending > 0 {
+		return false
+	}
+	if cs.LastDelivery == nil {
+		return true // created, never used
+	}
+	return now.Sub(*cs.LastDelivery) > olderThan
+}
+
 func cmdConsumers(args []string) {
 	fs := flag.NewFlagSet("consumers", flag.ExitOnError)
+	reap := fs.Bool("reap", false, "delete inboxes that are detached, empty, and idle past --older-than")
+	olderThan := fs.Duration("older-than", 7*24*time.Hour, "idle cutoff for --reap")
 	fs.Parse(args)
 	c := connect()
 	defer c.Close()
@@ -124,6 +143,23 @@ func cmdConsumers(args []string) {
 		os.Exit(1)
 	}
 	now := time.Now()
+	if *reap {
+		var gone, kept int
+		for _, cs := range list {
+			if !reapable(cs, now, *olderThan) {
+				kept++
+				continue
+			}
+			if err := c.DeleteInbox(context.Background(), cs.Name); err != nil {
+				fmt.Fprintf(os.Stderr, "reap %s: %v\n", cs.Name, err)
+				continue
+			}
+			fmt.Println("reaped", cs.Name)
+			gone++
+		}
+		fmt.Printf("%d reaped, %d kept (attached, holding mail, or newer than %s)\n", gone, kept, *olderThan)
+		return
+	}
 	tty := stdoutIsTTY()
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "CONSUMER\tPENDING\tACK-PENDING\tLAST-DELIVERY\tVERDICT")
@@ -196,11 +232,15 @@ func cmdSend(args []string) {
 		fmt.Fprintln(os.Stderr, "setup:", err)
 		os.Exit(1)
 	}
-	if err := c.Send(ctx, peers.Message{From: *from, To: *to, Content: content, DeliverAs: *mode}); err != nil {
+	status, err := c.Send(ctx, peers.Message{From: *from, To: *to, Content: content, DeliverAs: *mode})
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "send:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("sent %s -> %s\n", *from, *to)
+	fmt.Println(status.Human(*to))
+	if status == peers.NoInbox {
+		os.Exit(3) // scripts must be able to detect a message that went nowhere
+	}
 }
 
 // waitFor blocks until agent appears in presence. Spawning a peer is

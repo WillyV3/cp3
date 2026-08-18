@@ -48,7 +48,7 @@ func TestChaosServerRestart(t *testing.T) {
 	bcancel()
 	bob1.Close()
 
-	if err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "survive the crash"}); err != nil {
+	if _, err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "survive the crash"}); err != nil {
 		t.Fatal(err)
 	}
 	alice.Close()

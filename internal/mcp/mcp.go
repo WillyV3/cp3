@@ -593,11 +593,15 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			toolErr(s.t, id, "send_message requires 'to' and 'message'")
 			return
 		}
-		if err := s.c.Send(ctx, peers.Message{From: s.name(), To: a.To, Content: a.Message, DeliverAs: "steer"}); err != nil {
+		status, serr := s.c.Send(ctx, peers.Message{From: s.name(), To: a.To, Content: a.Message, DeliverAs: "steer"})
+		if err := serr; err != nil {
 			toolErr(s.t, id, "send failed: %v", err)
 			return
 		}
-		toolText(s.t, id, "Message sent to %s (queues if offline, delivers on reconnect).", a.To)
+		// This string is what every agent on the fleet reads to decide whether
+		// its message landed. It said "queues if offline" unconditionally,
+		// which is the lie that hid the rover bug for two days.
+		toolText(s.t, id, "%s", status.Human(a.To))
 
 	case "set_summary":
 		var a struct{ Summary string }

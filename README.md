@@ -34,7 +34,7 @@ in `~/.local/share/cp3`).
 cp3 run                      # launch claude with the peers channel loaded
 cp3 peers                    # who's online
 cp3 peers --wait api --timeout 45s   # block until a spawning peer registers (exit 0 = live)
-cp3 send --to frontend "does /api/v2/users paginate?"
+cp3 send --to frontend "does /api/v2/users paginate?"   # reports delivered / queued / NOT DELIVERED
 cp3 watch                    # firehose: every event on the network, live
 cp3 statusline               # one colored line for your statusline
 ```
@@ -88,6 +88,7 @@ usage block, and `cp3 setup --agents-md AGENTS.md` writes it into a file
 
 ```sh
 cp3 consumers                  # every subscriber: pending, last delivery, active/idle/STALE
+cp3 consumers --reap           # delete detached, empty, idle inboxes (never one holding mail)
 cp3 watch --as security-watch  # long-lived watchers register presence; a dead watcher is visible
 ```
 

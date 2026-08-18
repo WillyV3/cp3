@@ -186,3 +186,29 @@ func newTestClient(t *testing.T, s *natsserver.Server) *peers.Client {
 	}
 	return c
 }
+
+// Reaping must never destroy undelivered mail — inbox-sontara-web held a real
+// message for 307h, and a naive "delete stale consumers" would have eaten it.
+func TestReapable(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour)
+	recent := now.Add(-1 * time.Minute)
+	week := 7 * 24 * time.Hour
+	cases := []struct {
+		name string
+		cs   peers.ConsumerStatus
+		want bool
+	}{
+		{"attached session", peers.ConsumerStatus{Waiting: 1, LastDelivery: &old}, false},
+		{"holds undelivered mail", peers.ConsumerStatus{Pending: 1, LastDelivery: &old}, false},
+		{"delivered but unacked", peers.ConsumerStatus{AckPending: 1, LastDelivery: &old}, false},
+		{"recently active", peers.ConsumerStatus{LastDelivery: &recent}, false},
+		{"detached, empty, ancient", peers.ConsumerStatus{LastDelivery: &old}, true},
+		{"created and never used", peers.ConsumerStatus{}, true},
+	}
+	for _, c := range cases {
+		if got := reapable(c.cs, now, week); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}

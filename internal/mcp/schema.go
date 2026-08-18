@@ -11,7 +11,7 @@ var toolSchemas = []map[string]any{
 	},
 	{
 		"name":        "send_message",
-		"description": "Send a message to another session. Use the agent name (stable handle). Messages queue on the durable log if the recipient is offline and deliver on reconnect — nothing is lost.",
+		"description": "Send a message to another session by agent name. READ THE RESULT: it reports one of three real outcomes — \"delivered\" (a live session is consuming it now), \"queued\" (their inbox exists; it arrives when they reconnect), or \"NOT DELIVERED\" (no inbox exists for that name — nothing is subscribed, so the message will never be read; verify the name with list_peers). Do not assume success.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -62,7 +62,7 @@ IDENTITY:
 MESSAGING:
 - Push delivery: messages arrive as notifications/claude/channel with from_agent / message_id in the meta block. Push is reliable — you don't need to poll every turn.
 - To reply, call send_message with to = from_agent.
-- send_message to an offline agent queues on the durable log and delivers when they reconnect. Nothing is lost.
+- send_message reports which of three things actually happened, and you should read it: "delivered" (a live session is consuming now), "queued" (their inbox exists; it lands when they reconnect), or "NOT DELIVERED ... has no inbox" (nothing is subscribed to that name — the message will never be read; check the exact name in list_peers). Only the third is a failure, and it is loud on purpose.
 - On a new conversation, call check_messages ONCE to drain anything received before the channel was up. After that, trust the push.
 
 TOOLS:

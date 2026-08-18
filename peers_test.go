@@ -2,6 +2,7 @@ package peers
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestMessageDelivery(t *testing.T) {
 	})
 	time.Sleep(100 * time.Millisecond) // let the consumer attach
 
-	if err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "hi", DeliverAs: "steer"}); err != nil {
+	if _, err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "hi", DeliverAs: "steer"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "bob to receive", func() bool {
@@ -113,7 +114,7 @@ func TestOfflineDrain(t *testing.T) {
 	defer cancel()
 
 	// bob is offline — send anyway.
-	if err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "while you were out"}); err != nil {
+	if _, err := alice.Send(ctx, Message{From: "alice", To: "bob", Content: "while you were out"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +171,7 @@ func TestConsumersList(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// a message lands with nobody draining -> pending on the durable.
-	if err := c.Send(ctx, Message{From: "alice", To: "bob", Content: "backlog"}); err != nil {
+	if _, err := c.Send(ctx, Message{From: "alice", To: "bob", Content: "backlog"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "inbox-bob pending backlog", func() bool {
@@ -231,7 +232,7 @@ func TestFirehoseVisibility(t *testing.T) {
 	if err := c.Register(ctx, Peer{Agent: "dave"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Send(ctx, Message{From: "dave", To: "eve", Content: "yo"}); err != nil {
+	if _, err := c.Send(ctx, Message{From: "dave", To: "eve", Content: "yo"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "both events on firehose", func() bool {
@@ -239,4 +240,87 @@ func TestFirehoseVisibility(t *testing.T) {
 		defer mu.Unlock()
 		return seen[EventRegister] >= 1 && seen[EventMessage] >= 1
 	})
+}
+
+// The class of bug this whole change exists to kill: publishing always
+// "succeeds", so a message addressed to a name nobody subscribes to was
+// reported as sent. Each outcome must be distinguishable.
+func TestDeliveryStatus(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. No inbox at all -> NoInbox. This is the void case.
+	got, err := c.Send(ctx, Message{From: "alice", To: "nobody-home", Content: "into the void"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != NoInbox {
+		t.Errorf("no consumer: got %q want %q", got, NoInbox)
+	}
+
+	// 2. Inbox exists and a session is actively consuming -> DeliveredLive.
+	sctx, scancel := context.WithCancel(ctx)
+	go c.Subscribe(sctx, "bob", func(Message) {})
+	waitFor(t, "bob's inbox to start pulling", func() bool {
+		st := c.deliveryStatus(ctx, "bob")
+		return st == DeliveredLive
+	})
+	if got, err = c.Send(ctx, Message{From: "alice", To: "bob", Content: "live"}); err != nil || got != DeliveredLive {
+		t.Errorf("live consumer: got %q err=%v want %q", got, err, DeliveredLive)
+	}
+
+	// 3. Same inbox after the session goes away -> Queued, NOT NoInbox: the
+	// durable consumer survives, which is the offline-delivery feature.
+	scancel()
+	waitFor(t, "bob's inbox to stop pulling", func() bool {
+		return c.deliveryStatus(ctx, "bob") == Queued
+	})
+	if got, err = c.Send(ctx, Message{From: "alice", To: "bob", Content: "offline"}); err != nil || got != Queued {
+		t.Errorf("offline consumer: got %q err=%v want %q", got, err, Queued)
+	}
+
+	// Human text must name the failure unmistakably.
+	if msg := NoInbox.Human("rover"); !strings.Contains(msg, "NOT DELIVERED") {
+		t.Errorf("NoInbox.Human must be loud, got %q", msg)
+	}
+}
+
+// INVARIANT: anything on the roster is reachable. cp3 register used to
+// publish presence with no consumer, producing an agent you could see and
+// address but never actually reach.
+func TestRegisterIsReachable(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx := context.Background()
+
+	if c.deliveryStatus(ctx, "ghost") != NoInbox {
+		t.Fatal("precondition: unregistered name should have no inbox")
+	}
+	if err := c.Register(ctx, Peer{Agent: "ghost", Machine: "m", Session: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	// On the roster...
+	list, err := c.Peers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onRoster bool
+	for _, p := range list {
+		if p.Agent == "ghost" {
+			onRoster = true
+		}
+	}
+	if !onRoster {
+		t.Fatal("register did not put the agent on the roster")
+	}
+	// ...therefore reachable. Never NoInbox again.
+	got, err := c.Send(ctx, Message{From: "alice", To: "ghost", Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == NoInbox {
+		t.Error("INVARIANT VIOLATED: agent is on the roster but has no inbox")
+	}
 }
