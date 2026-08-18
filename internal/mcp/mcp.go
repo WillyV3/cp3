@@ -187,7 +187,90 @@ type server struct {
 	unread []peers.Message // buffered for check_messages fallback
 }
 
-// Run serves MCP over stdio until stdin closes.
+// sessionEnv is everything Run reads from the process world. Extracting it
+// is what makes session startup testable at all: identity continuity, claim
+// fallback, and spool replay are the highest-risk logic in cp3 (every
+// identity incident so far lived here) and they were welded to boot.Connect,
+// os.Stdin, and os.Exit — the last of which would kill a test binary outright.
+type sessionEnv struct {
+	cwd       string
+	machine   string
+	session   string
+	asName    string // --as flag
+	parentPID int
+	ephemeral bool // CLAUDE_PEERS_EPHEMERAL: send-only, no presence
+	noChannel bool // parent lacks the dev-channel flag
+}
+
+// newServer resolves this session's identity and returns the server plus any
+// messages a previous process received but never surfaced. Pure policy: no
+// dialing, no stdio, no exits, no goroutines — the caller owns those.
+func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv) (*server, []peers.Message) {
+	s := &server{
+		t:         t,
+		c:         c,
+		machine:   e.machine,
+		cwd:       e.cwd,
+		session:   e.session,
+		parentPID: e.parentPID,
+		noChannel: e.noChannel,
+	}
+	// Headless one-shots (claude -p from daemons/crons) must not become
+	// addressable residents: no claim, no presence, no register event — they
+	// can still send and list.
+	if !e.ephemeral {
+		// Session continuity beats directory discovery: if THIS Claude
+		// session already had an identity (state file survives MCP
+		// reconnects — same claude pid), take it back. Without this, an
+		// MCP restart re-reads the dir file, and in syncthing-shared dirs
+		// that file may name a DIFFERENT machine's agent — the root of the
+		// astrobot/sontara-mobile involuntary-rename incident.
+		if st := ReadState(e.parentPID); st.Claimed != "" || st.Wanted != "" {
+			s.configured = st.Wanted
+			prev := st.Claimed
+			if prev == "" {
+				prev = st.Wanted
+			}
+			p := s.peer()
+			p.Agent = prev
+			if _, err := c.Claim(ctx, p); err == nil {
+				s.me = prev
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] resumed session identity %q\n", prev)
+			} else {
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] session identity %q not reclaimable (%v); ephemeral until it frees\n", prev, err)
+			}
+		} else {
+			name, source := peers.ResolveIdentity(e.cwd, e.asName)
+			s.configured = name
+			s.me = name
+			s.me = claimIdentity(ctx, c, s.peer(), source)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
+	}
+	s.writeState() // statusline reads identity by claude-pid, not by cwd
+
+	// Anything a previous process received but never got in front of a human:
+	// rover's exact case — acked by a process that died, so a reconnect had
+	// nothing to replay from the stream. The spool has it. Drain the claimed
+	// name AND the configured one: a reconnect may land on a suffixed twin
+	// (rovertest -> rovertest-omarchy) while the spool sits under the name the
+	// sender actually addressed. Missing that orphans the message.
+	var missed []peers.Message
+	if n := s.me; n != "" {
+		missed = spoolDrain(n)
+		if s.configured != "" && s.configured != n {
+			missed = append(missed, spoolDrain(s.configured)...)
+		}
+	}
+	return s, missed
+}
+
+// replayDelay lets the session finish initializing before late messages land.
+var replayDelay = 2 * time.Second
+
+// Run serves MCP over stdio until stdin closes. Thin shell: dial, read the
+// world, hand policy to newServer, own the goroutines and exit codes.
 func Run() {
 	c, err := boot.Connect()
 	if err != nil {
@@ -203,77 +286,32 @@ func Run() {
 	}
 
 	cwd, _ := os.Getwd()
-	s := &server{
-		t:       newTransport(),
-		c:       c,
-		machine: env("CLAUDE_PEERS_MACHINE", hostname()),
-		cwd:     cwd,
-		session: env("CLAUDE_SESSION_ID", newSession()),
-	}
-	s.parentPID = os.Getppid()
+	parentPID := os.Getppid()
 	// Claude Code discards channel notifications from third-party MCP servers
 	// unless launched with --dangerously-load-development-channels. It reports
-	// nothing when it does — messages arrive, get written, and vanish. Detect
-	// it from the parent's argv so the failure is loud instead of invisible.
-	s.noChannel = !parentHasChannelFlag(s.parentPID)
-	if s.noChannel {
+	// nothing when it does — messages arrive, get written, and vanish.
+	noChannel := !parentHasChannelFlag(parentPID)
+	if noChannel {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] WARNING: this Claude was launched without --dangerously-load-development-channels;")
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] peer messages will be received and spooled but NEVER DISPLAYED. Relaunch with: cp3 run")
 	}
-	// Headless one-shots (claude -p from daemons/crons) must not become
-	// addressable residents: no claim, no presence, no register event — they
-	// can still send and list. The dispatcher sets CLAUDE_PEERS_EPHEMERAL=1.
-	if os.Getenv("CLAUDE_PEERS_EPHEMERAL") == "" {
-		// Session continuity beats directory discovery: if THIS Claude
-		// session already had an identity (state file survives MCP
-		// reconnects — same claude pid), take it back. Without this, an
-		// MCP restart re-reads the dir file, and in syncthing-shared dirs
-		// that file may name a DIFFERENT machine's agent — the root of the
-		// astrobot/sontara-mobile involuntary-rename incident.
-		if st := ReadState(s.parentPID); st.Claimed != "" || st.Wanted != "" {
-			s.configured = st.Wanted
-			prev := st.Claimed
-			if prev == "" {
-				prev = st.Wanted
-			}
-			p := s.peer()
-			p.Agent = prev
-			if _, err := c.Claim(ctx, p); err == nil {
-				s.me = prev
-				fmt.Fprintf(os.Stderr, "[cp3-mcp] resumed session identity %q\n", prev)
-			} else {
-				fmt.Fprintf(os.Stderr, "[cp3-mcp] session identity %q not reclaimable (%v); ephemeral until it frees\n", prev, err)
-			}
-		} else {
-			name, source := peers.ResolveIdentity(cwd, asFlag())
-			s.configured = name
-			s.me = name
-			s.me = claimIdentity(ctx, c, s.peer(), source)
-		}
-	} else {
-		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
-	}
-	s.writeState() // statusline reads identity by claude-pid, not by cwd
+	s, missed := newServer(ctx, c, newTransport(), sessionEnv{
+		cwd:       cwd,
+		machine:   env("CLAUDE_PEERS_MACHINE", hostname()),
+		session:   env("CLAUDE_SESSION_ID", newSession()),
+		asName:    asFlag(),
+		parentPID: parentPID,
+		ephemeral: os.Getenv("CLAUDE_PEERS_EPHEMERAL") != "",
+		noChannel: noChannel,
+	})
 
-	// Replay anything a previous process received but never got in front of a
-	// human: rover's exact case — acked at 12:36 by a process that died, so a
-	// reconnect had nothing to replay from the stream. The spool has it.
-	// Drain the claimed name AND the configured one: a reconnect may land on a
-	// suffixed twin (rovertest -> rovertest-omarchy) while the spool sits under
-	// the name the sender actually addressed. Missing that orphans the message.
-	if n := s.me; n != "" {
-		missed := spoolDrain(n)
-		if s.configured != "" && s.configured != n {
-			missed = append(missed, spoolDrain(s.configured)...)
-		}
-		if len(missed) > 0 {
-			go func(ms []peers.Message) {
-				time.Sleep(2 * time.Second) // let the session finish initializing
-				for _, m := range ms {
-					s.notifyMessage(m, true)
-				}
-			}(missed)
-		}
+	if len(missed) > 0 {
+		go func(ms []peers.Message) {
+			time.Sleep(replayDelay)
+			for _, m := range ms {
+				s.notifyMessage(m, true)
+			}
+		}(missed)
 	}
 
 	if s.me != "" {
@@ -288,8 +326,7 @@ func Run() {
 	}
 
 	// Laptop wake / server bounce: re-assert presence the moment the
-	// connection returns — the statusline blip shrinks from "next 15s tick
-	// after tailscale recovers" to effectively zero.
+	// connection returns.
 	c.OnReconnect(func() {
 		if n := s.name(); n != "" {
 			rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
@@ -303,8 +340,7 @@ func Run() {
 
 	// Names release the moment the session ends — the TTL is only the crash
 	// backstop. Claude closing the MCP channel lands on the stdin-EOF path;
-	// a kill lands on the signal path. Either way a restart within the same
-	// second re-claims its own name instead of a -machine fallback.
+	// a kill lands on the signal path.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -705,3 +741,7 @@ func newSession() string {
 	// ponytail: pid is unique enough for a session handle; no uuid dep.
 	return fmt.Sprintf("s-%d", os.Getpid())
 }
+
+// mutate4go-manifest-begin
+// {"version":1,"tested_at":"2026-08-18T13:02:16-04:00","module_hash":"b226870edf65c1ff1df59ec5cfb3dd1b313b779e190e20255911ac2bc15106ea","functions":[{"id":"func/newTransport","name":"newTransport","line":53,"end_line":57,"hash":"e0161ccb4339cf38c21f6d5987c769fb45a5da0aaad75c959603c1af64bce4b8"},{"id":"func/transport.read","name":"transport.read","line":59,"end_line":68,"hash":"fb40d242352229dbcb9025da67e0d867d64da0676b11e16b9f8b3011951cdfa1"},{"id":"func/transport.write","name":"transport.write","line":70,"end_line":79,"hash":"cc4e739beb63e333627992bc46d778ff6b3decc186d01fb9e8dc6e1e55ff2c3b"},{"id":"func/transport.respond","name":"transport.respond","line":81,"end_line":83,"hash":"2a2edbd65ddd12f73c91cb3c7b6568e2fa59851637fb92a073aa752069d073f9"},{"id":"func/transport.respondErr","name":"transport.respondErr","line":85,"end_line":87,"hash":"344ea7d4f031a8f001065bcc0cdde707d5d0decbf33c189a36187117c609c833"},{"id":"func/transport.notify","name":"transport.notify","line":89,"end_line":91,"hash":"8132d3f479e57e9c648e3e7e0f1181dbffc3ffa3ea05208dc388213af0ba74e2"},{"id":"func/asFlag","name":"asFlag","line":95,"end_line":102,"hash":"e69fedf5e963944f0e5d0c354af478358d52cab331680f9fabb0c38c4810b93e"},{"id":"func/claimIdentity","name":"claimIdentity","line":109,"end_line":152,"hash":"9896437b1a73af43027472ffcb4879f856d7bc8bd8f68e3480a2aa53c96b7861"},{"id":"func/parentHasChannelFlag","name":"parentHasChannelFlag","line":156,"end_line":162,"hash":"9d5fd4120e9bfca28b76b629e40799be7cbc1a0a966054e110790bcd5fccfb73"},{"id":"func/env","name":"env","line":164,"end_line":169,"hash":"d627d6d31f4af41051f59ef3993d05f8109737be419ec76b8719f4f9dda93424"},{"id":"func/newServer","name":"newServer","line":208,"end_line":267,"hash":"1c96f608dd5cf67d70b506943dec1c94ca9da1e8c0c0e3ded3df0423f10a7d92"},{"id":"func/Run","name":"Run","line":274,"end_line":353,"hash":"dd95d5173545cc013bc5d41ffc8612e337d82b7f9dc06abea3164554006e481a"},{"id":"func/server.release","name":"server.release","line":358,"end_line":367,"hash":"8f62fdd0c8b8b62cab0339b265d8c471c8c144d7fe10391b5b20d0d72d043991"},{"id":"func/server.name","name":"server.name","line":369,"end_line":373,"hash":"10578a2ed047cd88ef2c2986211bb7ba6998a2fa723f4200cd6deb66489d60fe"},{"id":"func/server.setName","name":"server.setName","line":375,"end_line":379,"hash":"6c0267825659af6901c5f114f537dffc127638c884cc6e04a08e7584895a846f"},{"id":"func/server.tryReclaim","name":"server.tryReclaim","line":386,"end_line":425,"hash":"1956899da156cd665c8e394b846bd71aa2bc2422ab91d51adbb2d4466c002f1c"},{"id":"func/server.peer","name":"server.peer","line":427,"end_line":429,"hash":"88f7d220300f3826fcebf00a89786c6998f323c91f5a0dd8d39aa5d1407deb9b"},{"id":"func/server.heartbeat","name":"server.heartbeat","line":431,"end_line":462,"hash":"084905d9f9b89c0b6c5fa018405a9ab34bd7f747a77e44c47be42fbde00d2562"},{"id":"func/server.nameLost","name":"server.nameLost","line":466,"end_line":480,"hash":"941f1beaf2b30827c7a79a11f944f5fc01d56fc2af2f3d64f20579dde6af1a7f"},{"id":"func/server.pushLoop","name":"server.pushLoop","line":485,"end_line":496,"hash":"2d9550fd60ad358c4eda7f2ed612b153d237733042c6add102f783cb6e98d4f9"},{"id":"func/server.notifyMessage","name":"server.notifyMessage","line":501,"end_line":529,"hash":"42f2b6d19617c16fa84221ea5bf79c10798d0e3fc77084dcad9a7f4ccc514eaf"},{"id":"func/server.peersList","name":"server.peersList","line":531,"end_line":534,"hash":"553b2ef919fd32d72ad52a26624dd8f3dfbe42c91d5e2190f346c06349bd49e1"},{"id":"func/server.serve","name":"server.serve","line":540,"end_line":561,"hash":"e1b1c25a40f2cc777eb56d4541def865a0755328f7d6c1f5b5ed582b2c0a9a9f"},{"id":"func/server.handleInit","name":"server.handleInit","line":563,"end_line":573,"hash":"367c23564429f50127cefa4acaa9393015c40dd08bc00acb3ba056c7c30e12b5"},{"id":"func/server.fleetContext","name":"server.fleetContext","line":575,"end_line":593,"hash":"fb9bd92a8d2a9d2c542301b3189ae870789ac1da1a7ec73b18860a4b1b173db3"},{"id":"func/toolText","name":"toolText","line":595,"end_line":597,"hash":"382773c52a6a03dc1a423d16db1c3584a70e361a4f77f9b349f4a8b3501cbba4"},{"id":"func/toolErr","name":"toolErr","line":599,"end_line":604,"hash":"98a94c26311ec12fa55b661c0143164cb193a9f732f6c44e5a85b90e452df5d2"},{"id":"func/server.handleCall","name":"server.handleCall","line":606,"end_line":731,"hash":"0a6053252649ed6d59cc14324d6b973d5d596b201ea23a79f6db15503ec5162c"},{"id":"func/hostname","name":"hostname","line":735,"end_line":738,"hash":"9818d312243f8ceb0f204bb80cb4a9c42f7a04bba87ebed368fbcebf9cbdb2b0"},{"id":"func/newSession","name":"newSession","line":740,"end_line":743,"hash":"4c4b84ea32012efb794d57b62502618474ad6f5a823cc891517f6eadf7758bfb"}]}
+// mutate4go-manifest-end
