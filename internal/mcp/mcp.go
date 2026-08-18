@@ -42,13 +42,18 @@ type rpcReq struct {
 
 type transport struct {
 	scanner *bufio.Scanner
-	mu      sync.Mutex
+	// out is where JSON-RPC goes. Injectable because hardcoding os.Stdout
+	// made every tool handler untestable — which is how the delivery bugs
+	// (ack-without-injection, success-into-the-void) shipped from a function
+	// with 0% coverage. The untestability was the defect; CC was the symptom.
+	out io.Writer
+	mu  sync.Mutex
 }
 
 func newTransport() *transport {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	return &transport{scanner: sc}
+	return &transport{scanner: sc, out: os.Stdout}
 }
 
 func (t *transport) read() (rpcReq, error) {
@@ -66,7 +71,11 @@ func (t *transport) write(v any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	data, _ := json.Marshal(v)
-	fmt.Fprintf(os.Stdout, "%s\n", data)
+	w := t.out
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintf(w, "%s\n", data)
 }
 
 func (t *transport) respond(id, result any) {
