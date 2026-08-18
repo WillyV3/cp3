@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -218,8 +220,7 @@ func cmdSend(args []string) {
 	fs.Parse(args)
 	content := strings.Join(fs.Args(), " ")
 	if *from == "" {
-		cwd, _ := os.Getwd()
-		*from, _ = peers.ResolveIdentity(cwd, "")
+		*from = callerIdentity()
 	}
 	if *from == "" || *to == "" || content == "" {
 		fmt.Fprintln(os.Stderr, "send: --to and a message are required (--from resolved from identity)")
@@ -241,6 +242,42 @@ func cmdSend(args []string) {
 	if status == peers.NoInbox {
 		os.Exit(3) // scripts must be able to detect a message that went nowhere
 	}
+}
+
+// callerIdentity resolves who is sending. A `cp3 send` run from inside a
+// Claude session should be attributed to that SESSION, not to whatever
+// directory the shell happens to sit in — jim sent from a shell in another
+// project and the message arrived attributed to "wedding-tracker", a name no
+// agent has ever held. Walk up the process tree (cp3 <- bash <- claude)
+// looking for a session state file; fall back to directory identity for
+// genuine non-session use like crons.
+func callerIdentity() string {
+	pid := os.Getppid()
+	for range 4 {
+		if pid <= 1 {
+			break
+		}
+		if st := mcp.ReadState(pid); st.Claimed != "" {
+			return st.Claimed
+		}
+		pid = parentOf(pid)
+	}
+	cwd, _ := os.Getwd()
+	name, _ := peers.ResolveIdentity(cwd, "")
+	return name
+}
+
+// parentOf returns a process's parent pid, or 0.
+func parentOf(pid int) int {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // waitFor blocks until agent appears in presence. Spawning a peer is

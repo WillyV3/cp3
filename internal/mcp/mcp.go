@@ -650,6 +650,13 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			toolErr(s.t, id, "claim_agent_name requires 'name'")
 			return
 		}
+		// Sanitize: the name becomes a NATS subject token, and an unsanitized
+		// claim would create an inbox nobody can address.
+		a.Name = peers.SanitizeName(a.Name)
+		if a.Name == "" {
+			toolErr(s.t, id, "invalid agent name")
+			return
+		}
 		p := peers.Peer{Agent: a.Name, Machine: s.machine, Cwd: s.cwd, Session: s.session}
 		if holder, err := s.c.Claim(ctx, p); err == peers.ErrNameTaken {
 			toolErr(s.t, id, "name %q already held by session %s on %s", a.Name, holder.Session, holder.Machine)

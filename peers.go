@@ -240,6 +240,9 @@ func (c *Client) publish(ctx context.Context, subject string, t EventType, actor
 // reachable. One definition, shared by Register and Subscribe, so presence and
 // deliverability can never be created from two different shapes.
 func (c *Client) ensureInbox(ctx context.Context, agent string) (jetstream.Consumer, error) {
+	if err := validRecipient(agent); err != nil {
+		return nil, err
+	}
 	// Durable so messages sent while offline drain on reconnect;
 	// InactiveThreshold reaps a name abandoned for good.
 	cons, err := c.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
@@ -523,9 +526,32 @@ func (c *Client) DeleteInbox(ctx context.Context, name string) error {
 	return c.js.DeleteConsumer(ctx, streamName, name)
 }
 
+// ErrInvalidName is returned for a recipient that cannot be a real agent.
+var ErrInvalidName = errors.New("invalid agent name")
+
+// validRecipient rejects anything that is not already a sanitized name.
+// The recipient becomes a NATS subject token, so an unchecked name is a
+// subject-injection vector: ">" and "*" are wildcards, dots add subject
+// levels, spaces and newlines make the publish invalid outright. Every real
+// agent name is produced by SanitizeName, so a name that is not its own
+// sanitized form cannot belong to any peer and must never be reported as
+// queued. (Found by torture test, not by inspection.)
+func validRecipient(to string) error {
+	if to == "" {
+		return fmt.Errorf("%w: empty", ErrInvalidName)
+	}
+	if SanitizeName(to) != to {
+		return fmt.Errorf("%w: %q is not a valid agent name (expected %q)", ErrInvalidName, to, SanitizeName(to))
+	}
+	return nil
+}
+
 // Send appends a message event to peers.msg.<to> and reports what will
 // actually happen to it.
 func (c *Client) Send(ctx context.Context, m Message) (DeliveryStatus, error) {
+	if err := validRecipient(m.To); err != nil {
+		return NoInbox, err
+	}
 	if m.ID == "" {
 		m.ID = newID()
 	}
