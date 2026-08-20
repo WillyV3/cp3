@@ -130,11 +130,27 @@ func cmdSetup(args []string) {
 	if err != nil {
 		bin = "cp3"
 	}
+	// Only pin NATS_URL when the operator asked for a specific server.
+	// Writing the localhost DEFAULT into the MCP env was a real outage: an
+	// env var there permanently overrides ~/.config/cp3/url, so every Claude
+	// session on a machine set up without --nats silently joined a local
+	// island while every CLI tool used the fleet — and doctor inherited the
+	// same wrong env, so it reported PASS. Config file stays the single
+	// source of truth unless told otherwise.
+	natsExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "nats" {
+			natsExplicit = true
+		}
+	})
 	// Secrets are deliberately NOT written here — the token resolves at runtime
 	// from NATS_TOKEN / NATS_TOKEN_FILE / ~/.config/cp3/token. And the agent
 	// name is usually per-session (dir identity, env, or .claude-peers-agent
 	// file), not baked into shared config where every session would collide.
-	env := map[string]any{"NATS_URL": *nats}
+	env := map[string]any{}
+	if natsExplicit {
+		env["NATS_URL"] = *nats
+	}
 	if *agent != "" {
 		env["CLAUDE_PEERS_AGENT"] = *agent
 	}

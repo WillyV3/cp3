@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	peers "github.com/WillyV3/cp3"
@@ -15,6 +16,15 @@ import (
 
 // cmdDoctor walks the setup chain in dependency order and says the one thing
 // that's wrong. Every support question becomes "run cp3 doctor".
+// readCfg returns ~/.config/cp3/<name> contents, or "".
+func readCfg(home, name string) string {
+	b, err := os.ReadFile(filepath.Join(home, ".config", "cp3", name))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func cmdDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	fs.Parse(args)
@@ -45,6 +55,18 @@ func cmdDoctor(args []string) {
 		urlSrc = "~/.config/cp3/url"
 	}
 	report(true, false, "config", peers.URLFromEnv()+" via "+urlSrc, "")
+
+	// The xps outage: an MCP env var pinned localhost while the config file
+	// pointed at the fleet, so sessions registered on an island of one and
+	// every check passed. If the two disagree, say so — the env wins, and
+	// that is exactly what nobody expects.
+	if envURL := os.Getenv("NATS_URL"); envURL != "" {
+		if fileURL := strings.TrimSpace(readCfg(home, "url")); fileURL != "" && fileURL != envURL {
+			report(false, false, "network split",
+				fmt.Sprintf("NATS_URL=%s overrides ~/.config/cp3/url=%s — this session is on a DIFFERENT network than the fleet", envURL, fileURL),
+				"unset NATS_URL, or remove it from the claude-peers env block in ~/.claude.json")
+		}
+	}
 
 	// 2. server reachable + authed (one dial answers both).
 	c, err := peers.ConnectFromEnv()

@@ -153,3 +153,45 @@ func TestMergeStatusLine(t *testing.T) {
 		t.Fatalf("custom statusline clobbered: %s", b)
 	}
 }
+
+// The xps outage: `cp3 setup` with no --nats wrote the LOCALHOST DEFAULT into
+// the MCP env, and an env var there permanently overrides ~/.config/cp3/url.
+// Every Claude session on that machine silently joined a local island of one
+// while every CLI tool used the fleet — and doctor, inheriting the same env,
+// reported PASS. Setup must not pin a server nobody asked for.
+func TestSetupDoesNotPinDefaultNATSURL(t *testing.T) {
+	readEnv := func(t *testing.T, path string) map[string]any {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			MCPServers map[string]struct {
+				Env map[string]any `json:"env"`
+			} `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.MCPServers["claude-peers"].Env
+	}
+
+	t.Run("no --nats leaves the config file authoritative", func(t *testing.T) {
+		dir := t.TempDir()
+		mcpPath := filepath.Join(dir, "claude.json")
+		cmdSetup([]string{"--mcp", mcpPath, "--settings", filepath.Join(dir, "settings.json")})
+		if url, ok := readEnv(t, mcpPath)["NATS_URL"]; ok {
+			t.Errorf("setup pinned NATS_URL=%v without being asked — this is the island bug", url)
+		}
+	})
+
+	t.Run("explicit --nats is honored", func(t *testing.T) {
+		dir := t.TempDir()
+		mcpPath := filepath.Join(dir, "claude.json")
+		cmdSetup([]string{"--mcp", mcpPath, "--settings", filepath.Join(dir, "settings.json"), "--nats", "nats://10.0.0.5:4222"})
+		if got := readEnv(t, mcpPath)["NATS_URL"]; got != "nats://10.0.0.5:4222" {
+			t.Errorf("explicit --nats not written: got %v", got)
+		}
+	})
+}
