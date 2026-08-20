@@ -72,10 +72,11 @@ func statusLine(configured, claimed, session, cwd, machine string, list []peers.
 	// A path is only unique WITHIN a machine. Every box in the fleet has a
 	// /home/<user>, so comparing cwd alone made a session on another machine
 	// read as sitting in your directory — "⚠ also here: jim" on a fresh box
-	// where jim is 200 miles away. Same path here is a real double-edit
-	// warning; same path elsewhere is fleet awareness, not a fault.
+	// where jim is 200 miles away. Only same-machine collisions matter here:
+	// they are a real double-edit risk. Another machine sharing a path name
+	// is not this operator's problem, and putting it in every statusline was
+	// noise — that view belongs in `cp3 peers`.
 	var with []string
-	var elsewhereOrder []string
 	for i := range list {
 		p := list[i]
 		if self != nil && p.Agent == self.Agent {
@@ -96,9 +97,8 @@ func statusLine(configured, claimed, session, cwd, machine string, list []peers.
 		}
 		if p.Machine == machine {
 			with = append(with, p.Agent)
-			continue
 		}
-		elsewhereOrder = append(elsewhereOrder, p.Agent+" ("+p.Machine+")")
+		// Different machine: silent. Not a conflict, not this operator's problem.
 	}
 
 	var line string
@@ -123,42 +123,7 @@ func statusLine(configured, claimed, session, cwd, machine string, list []peers.
 		// Soft yellow noticing aid — co-location is legitimate, just worth seeing.
 		line += paint(on, cDim, " · with ") + paint(on, cYellow, strings.Join(with, ", "))
 	}
-	if len(elsewhereOrder) > 0 {
-		// Dim, never a warning: you cannot double-edit across machines by
-		// accident. The PATH is the reason the notice exists, so it stays;
-		// the machine in parens is what makes "here" honest.
-		line += paint(on, cDim, " · also in "+shortPath(cwd)+" — "+strings.Join(elsewhereOrder, ", "))
-	}
 	return line
-}
-
-// shortPath renders a path the way a human reads it: a home directory as
-// ~user, something under this machine's home as ~/rest, anything else
-// verbatim. Cross-machine paths keep THEIR owner's name (a mac peer shows
-// ~williamvansickleiii), which is part of what disambiguates them.
-func shortPath(p string) string {
-	if p == "" {
-		return p
-	}
-	// An exact home directory renders as ~user, never bare "~": this string
-	// describes a path on someone ELSE'S machine, and "~" would read as the
-	// viewer's own home.
-	for _, root := range []string{"/home/", "/Users/"} {
-		if strings.HasPrefix(p, root) {
-			rest := strings.TrimPrefix(p, root)
-			if user, tail, found := strings.Cut(rest, "/"); found {
-				if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home+"/") {
-					return "~" + strings.TrimPrefix(p, home) // under my own home
-				}
-				return "~" + user + "/" + tail
-			}
-			return "~" + rest
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home+"/") {
-		return "~" + strings.TrimPrefix(p, home)
-	}
-	return p
 }
 
 // readStdin drains piped stdin (Claude pumps session JSON at statusline

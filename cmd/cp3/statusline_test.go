@@ -226,11 +226,17 @@ func TestStatusLineCoLocationIsMachineScoped(t *testing.T) {
 		{Agent: "jim", Cwd: "/home/willy", Machine: "omarchy", Session: "s-jim"},
 	}
 	got := statusLine("xps", "", "s-xps", "/home/willy", "xps", xpsView, 0, false, nil)
-	if strings.Contains(got, "also here") {
+	if strings.Contains(got, "also here") || strings.Contains(got, "with") {
 		t.Errorf("cross-machine session reported as co-located: %q", got)
 	}
-	if !strings.Contains(got, "also in ~willy — jim (omarchy)") {
-		t.Errorf("cross-machine peer should render Willy's spec, got %q", got)
+	// Operator ruling: a peer on ANOTHER box sharing a path name is not this
+	// operator's problem. Silent — not dimmed, not abbreviated. That view
+	// belongs in `cp3 peers`.
+	if strings.Contains(got, "jim") || strings.Contains(got, "omarchy") {
+		t.Errorf("cross-machine peer must not appear in the statusline at all, got %q", got)
+	}
+	if got != "○ xps · not registered" {
+		t.Errorf("expected a clean line with nothing appended, got %q", got)
 	}
 
 	// Same machine, same path: still a real warning.
@@ -250,7 +256,10 @@ func TestStatusLineCoLocationIsMachineScoped(t *testing.T) {
 		{Agent: "far", Cwd: "/w", Machine: "raspdeck", Session: "s-f"},
 	}
 	got = statusLine("keeper", "keeper", "s-k", "/w", "omarchy", mixed, 0, false, nil)
-	if !strings.Contains(got, "with near") || !strings.Contains(got, "far (raspdeck)") {
-		t.Errorf("mixed co-location rendered wrong: %q", got)
+	if !strings.Contains(got, "with near") {
+		t.Errorf("same-machine peer missing: %q", got)
+	}
+	if strings.Contains(got, "far") || strings.Contains(got, "raspdeck") {
+		t.Errorf("cross-machine peer leaked into the line: %q", got)
 	}
 }
