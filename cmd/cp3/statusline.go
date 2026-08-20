@@ -32,7 +32,7 @@ import (
 //	claimed drifted -> yell " · ⚠ wanted <configured>"
 //	undrained inbox -> yell " · ✉N"
 //	co-located      -> soft " · with a@machine, b"  (yellow names, not a fault)
-func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pending uint64, noChannel bool, err error) string {
+func statusLine(configured, claimed, session, cwd, machine string, list []peers.Peer, pending uint64, noChannel bool, err error) string {
 	const on = true
 	if err != nil {
 		return paint(on, cRed, "○ peers down")
@@ -69,19 +69,36 @@ func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pen
 		return "" // no identity: emit nothing, wrappers hide the empty segment
 	}
 
+	// A path is only unique WITHIN a machine. Every box in the fleet has a
+	// /home/<user>, so comparing cwd alone made a session on another machine
+	// read as sitting in your directory — "⚠ also here: jim" on a fresh box
+	// where jim is 200 miles away. Same path here is a real double-edit
+	// warning; same path elsewhere is fleet awareness, not a fault.
 	var with []string
+	var elsewhereOrder []string
 	for i := range list {
 		p := list[i]
 		if self != nil && p.Agent == self.Agent {
 			continue // me
 		}
-		if cwd != "" && p.Cwd == cwd {
+		if cwd == "" || p.Cwd != cwd {
+			continue
+		}
+		if machine == "" || p.Machine == "" {
+			// Can't tell which box this is: label it rather than assert
+			// co-location, which is the assertion that was wrong.
 			label := p.Agent
 			if p.Machine != "" {
 				label += "@" + p.Machine
 			}
 			with = append(with, label)
+			continue
 		}
+		if p.Machine == machine {
+			with = append(with, p.Agent)
+			continue
+		}
+		elsewhereOrder = append(elsewhereOrder, p.Agent+" ("+p.Machine+")")
 	}
 
 	var line string
@@ -106,7 +123,42 @@ func statusLine(configured, claimed, session, cwd string, list []peers.Peer, pen
 		// Soft yellow noticing aid — co-location is legitimate, just worth seeing.
 		line += paint(on, cDim, " · with ") + paint(on, cYellow, strings.Join(with, ", "))
 	}
+	if len(elsewhereOrder) > 0 {
+		// Dim, never a warning: you cannot double-edit across machines by
+		// accident. The PATH is the reason the notice exists, so it stays;
+		// the machine in parens is what makes "here" honest.
+		line += paint(on, cDim, " · also in "+shortPath(cwd)+" — "+strings.Join(elsewhereOrder, ", "))
+	}
 	return line
+}
+
+// shortPath renders a path the way a human reads it: a home directory as
+// ~user, something under this machine's home as ~/rest, anything else
+// verbatim. Cross-machine paths keep THEIR owner's name (a mac peer shows
+// ~williamvansickleiii), which is part of what disambiguates them.
+func shortPath(p string) string {
+	if p == "" {
+		return p
+	}
+	// An exact home directory renders as ~user, never bare "~": this string
+	// describes a path on someone ELSE'S machine, and "~" would read as the
+	// viewer's own home.
+	for _, root := range []string{"/home/", "/Users/"} {
+		if strings.HasPrefix(p, root) {
+			rest := strings.TrimPrefix(p, root)
+			if user, tail, found := strings.Cut(rest, "/"); found {
+				if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home+"/") {
+					return "~" + strings.TrimPrefix(p, home) // under my own home
+				}
+				return "~" + user + "/" + tail
+			}
+			return "~" + rest
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home+"/") {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
 }
 
 // readStdin drains piped stdin (Claude pumps session JSON at statusline
@@ -142,6 +194,10 @@ func cmdStatusLine(args []string) {
 		}
 	}
 	cwd, _ := os.Getwd()
+	machine := os.Getenv("CLAUDE_PEERS_MACHINE")
+	if machine == "" {
+		machine, _ = os.Hostname()
+	}
 	// Identity is SESSION-bound, not directory-bound: the session's MCP server
 	// records {claimed, wanted} keyed by the claude pid, and that beats
 	// re-resolving from whatever directory the session has wandered into.
@@ -161,7 +217,7 @@ func cmdStatusLine(args []string) {
 	go func() {
 		c, err := peers.ConnectFromEnv()
 		if err != nil {
-			done <- statusLine(configured, claimed, sid, cwd, nil, 0, st.NoChannel, err)
+			done <- statusLine(configured, claimed, sid, cwd, machine, nil, 0, st.NoChannel, err)
 			return
 		}
 		defer c.Close()
@@ -191,12 +247,12 @@ func cmdStatusLine(args []string) {
 				}
 			}
 		}
-		done <- statusLine(configured, claimed, sid, cwd, list, pending, st.NoChannel, err)
+		done <- statusLine(configured, claimed, sid, cwd, machine, list, pending, st.NoChannel, err)
 	}()
 	select {
 	case line := <-done:
 		fmt.Println(line)
 	case <-time.After(700 * time.Millisecond):
-		fmt.Println(statusLine(configured, claimed, sid, cwd, nil, 0, st.NoChannel, context.DeadlineExceeded))
+		fmt.Println(statusLine(configured, claimed, sid, cwd, machine, nil, 0, st.NoChannel, context.DeadlineExceeded))
 	}
 }
