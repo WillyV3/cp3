@@ -195,3 +195,38 @@ func TestNewServerNoDriftDrainsSpoolOnce(t *testing.T) {
 		t.Errorf("no-drift spool drained %d times, want exactly 1: %+v", len(missed), missed)
 	}
 }
+
+// jim's xps finding, generalized: state written while connected to ANOTHER
+// broker (a stray local server) is not authority on the broker we are on now.
+// A remembered name that cannot be claimed here must fall through to a fresh
+// claim — sitting nameless makes the session unreachable and indistinguishable
+// from a broken network, which is how the island hid for two hours.
+func TestNewServerFallsThroughWhenRememberedNameUnavailable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := newTestClient(t)
+	ctx := context.Background()
+
+	// State remembers "ghost-identity" (claimed on a broker we no longer use)...
+	prev := &server{parentPID: 5150, me: "ghost-identity", configured: "ghost-identity"}
+	prev.writeState()
+	// ...and on THIS broker that name is held by a different live session.
+	if err := c.Register(ctx, peers.Peer{Agent: "ghost-identity", Machine: "elsewhere", Session: "not-us"}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir() + "/real-project"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := newServer(ctx, c, &transport{out: &bytes.Buffer{}}, envFor(dir, 5150))
+
+	if s.me == "" {
+		t.Fatal("session left nameless: unreachable, and looks identical to a network fault")
+	}
+	if s.me == "ghost-identity" {
+		t.Fatal("stole a name held by a live session on this broker")
+	}
+	if s.me != "real-project" {
+		t.Errorf("expected fresh directory identity, got %q", s.me)
+	}
+}

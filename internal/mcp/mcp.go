@@ -237,7 +237,19 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 				s.me = prev
 				fmt.Fprintf(os.Stderr, "[cp3-mcp] resumed session identity %q\n", prev)
 			} else {
-				fmt.Fprintf(os.Stderr, "[cp3-mcp] session identity %q not reclaimable (%v); ephemeral until it frees\n", prev, err)
+				// The remembered name is unavailable ON THIS BROKER. State
+				// written while connected elsewhere (a stray local server, a
+				// different fleet) is not authority here, and neither is a
+				// name a live session already holds. Falling through to a
+				// fresh claim beats sitting nameless: an agent nobody can
+				// address is indistinguishable from a broken network, which
+				// is precisely how the xps island hid for two hours.
+				fmt.Fprintf(os.Stderr, "[cp3-mcp] remembered identity %q unavailable here (%v); claiming fresh\n", prev, err)
+				name, source := peers.ResolveIdentity(e.cwd, e.asName)
+				if name != "" {
+					s.configured = name
+					s.me = claimIdentity(ctx, c, peers.Peer{Agent: name, Machine: s.machine, Cwd: s.cwd, Session: s.session}, source)
+				}
 			}
 		} else {
 			name, source := peers.ResolveIdentity(e.cwd, e.asName)

@@ -48,6 +48,7 @@ func cmdDoctor(args []string) {
 
 	// 1. config: where do url + token come from?
 	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
 	urlSrc := "localhost default (auto-serves on demand)"
 	if os.Getenv("NATS_URL") != "" {
 		urlSrc = "env NATS_URL"
@@ -92,6 +93,23 @@ func cmdDoctor(args []string) {
 			report(true, false, "presence", fmt.Sprintf("%d peers online", len(list)), "")
 		}
 
+		// "8 peers online" says the NETWORK is healthy; it says nothing about
+		// whether THIS session is reachable. doctor reported ALL PASS through
+		// a total registration outage on xps because it never asked that.
+		name, src := peers.ResolveIdentity(cwd, "")
+		if name != "" {
+			var found bool
+			for _, p := range list {
+				if p.Agent == name {
+					found = true
+					break
+				}
+			}
+			report(found, false, "my identity",
+				fmt.Sprintf("%q (from %s) %s", name, src, map[bool]string{true: "is on the roster", false: "is NOT on the roster — messages to it go nowhere"}[found]),
+				"no live session holds this name here; launch with `cp3 run`, or check for a stale ~/.local/share/cp3/by-claude-pid state file")
+		}
+
 		if cs, cerr := c.Consumers(ctx); cerr == nil {
 			stale := 0
 			now := time.Now()
@@ -129,7 +147,6 @@ func cmdDoctor(args []string) {
 	report(mcpOK, false, "claude mcp", mcpDetail, "run: cp3 setup")
 
 	// 7. identity: what would THIS dir be called?
-	cwd, _ := os.Getwd()
 	name, source := peers.ResolveIdentity(cwd, "")
 	report(name != "", false, "identity",
 		fmt.Sprintf("%q (from %s)", name, source),
