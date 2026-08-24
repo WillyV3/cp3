@@ -46,6 +46,15 @@ func cmdDoctor(args []string) {
 		fmt.Printf("%s  %-18s %s\n", tag, what, detail)
 	}
 
+	// 0. version: "what is the fleet running" had no answer, and every
+	// incident this month was a divergence problem. Fleet machines track
+	// releases; only the development box runs an untagged build.
+	build := version
+	if build == "dev" {
+		build = "dev (untagged build — expected only on the machine where cp3 is developed)"
+	}
+	report(true, version == "dev", "version", build, "")
+
 	// 1. config: where do url + token come from?
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()

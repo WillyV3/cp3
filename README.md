@@ -92,6 +92,14 @@ cp3 consumers --reap           # delete detached, empty, idle inboxes (never one
 cp3 watch --as security-watch  # long-lived watchers register presence; a dead watcher is visible
 ```
 
+## Fleet versioning
+
+Machines track **releases**; only the box where cp3 is developed runs an
+untagged build. `cp3 doctor` reports the version first and warns on `dev`, so
+"what is this machine running" is one command instead of a checksum sweep —
+divergence between machines caused every incident worth writing a postmortem
+about.
+
 ## Design
 
 A durable event log (embedded NATS JetStream) is the entire backend.
