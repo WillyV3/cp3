@@ -81,3 +81,44 @@ func spoolDrain(agent string) []peers.Message {
 	os.Remove(p)
 	return out
 }
+
+// spoolRemove drops specific message ids, leaving the rest queued. This is the
+// counterpart spoolAppend needed and did not have: the spool cleared only via
+// check_messages and startup replay — both FALLBACK paths — so a normally
+// delivered message stayed queued forever and every restart replayed the whole
+// history. rover's file held 13 days of already-read mail.
+func spoolRemove(agent string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	p := spoolPath(agent)
+	if p == "" {
+		return
+	}
+	drop := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		drop[id] = true
+	}
+	spoolMu.Lock()
+	defer spoolMu.Unlock()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var keep []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var m peers.Message
+		if json.Unmarshal([]byte(line), &m) == nil && drop[m.ID] {
+			continue
+		}
+		keep = append(keep, line)
+	}
+	if len(keep) == 0 {
+		os.Remove(p)
+		return
+	}
+	os.WriteFile(p, []byte(strings.Join(keep, "\n")+"\n"), 0o600)
+}

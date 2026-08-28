@@ -183,8 +183,9 @@ type server struct {
 	noChannel  bool               // parent lacks the dev-channel flag: injection is a no-op
 	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
 
-	mu     sync.Mutex
-	unread []peers.Message // buffered for check_messages fallback
+	mu       sync.Mutex
+	unread   []peers.Message // buffered for check_messages fallback
+	notified []string        // spooled ids written to the channel, awaiting proof the client read them
 }
 
 // sessionEnv is everything Run reads from the process world. Extracting it
@@ -504,6 +505,9 @@ func (s *server) pushLoop(ctx context.Context, name string) {
 		s.mu.Unlock()
 
 		s.notifyMessage(m, false)
+		s.mu.Lock()
+		s.notified = append(s.notified, m.ID)
+		s.mu.Unlock()
 	})
 }
 
@@ -555,6 +559,10 @@ func (s *server) serve(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		// A request arriving AFTER we wrote a channel notification proves the
+		// client is alive and consuming this pipe — the receipt Claude never
+		// sends explicitly. Only then is a spooled message safe to drop.
+		s.confirmNotified()
 		switch req.Method {
 		case "initialize":
 			s.handleInit(req.ID)
@@ -569,6 +577,19 @@ func (s *server) serve(ctx context.Context) {
 				s.t.respondErr(req.ID, -32601, "method not found: "+req.Method)
 			}
 		}
+	}
+}
+
+// confirmNotified clears spool entries whose notification the client has now
+// demonstrably read. Anything still unconfirmed when this process dies stays
+// spooled and replays on restart — which is the rover case, preserved.
+func (s *server) confirmNotified() {
+	s.mu.Lock()
+	ids := s.notified
+	s.notified = nil
+	s.mu.Unlock()
+	if len(ids) > 0 {
+		spoolRemove(s.name(), ids)
 	}
 }
 
