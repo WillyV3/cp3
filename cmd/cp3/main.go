@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -306,10 +307,71 @@ func waitFor(c *peers.Client, agent string, timeout time.Duration) (peers.Peer, 
 	}
 }
 
+// rosterRow is one line of `cp3 peers --json`.
+//
+// LastMailSecs is when this inbox last RECEIVED mail — it is NOT "last active".
+// cp3 has no busy/idle signal at all; it knows presence and inbox depth and
+// nothing about what the agent is doing. Named for what it measures so no
+// caller renders it as activity.
+type rosterRow struct {
+	Name         string `json:"name"`
+	Up           bool   `json:"up"`
+	Pending      uint64 `json:"pending"`
+	Machine      string `json:"machine,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	LastMailSecs *int64 `json:"last_mail_secs,omitempty"`
+}
+
+// rosterJSON joins presence with inboxes as a UNION, not an intersection.
+// Presence alone cannot describe a peer that is DOWN, and a down peer holding
+// unread mail is the row a session switcher most needs. Pending is ~always 0
+// for a live peer (an attached session drains immediately), so presence-only
+// output would report pending=0 for every row that has one and no row at all
+// for the peers that matter.
+func rosterJSON(list []peers.Peer, cons []peers.ConsumerStatus, now time.Time) []rosterRow {
+	rows := map[string]*rosterRow{}
+	for _, p := range list {
+		rows[p.Agent] = &rosterRow{
+			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Summary: p.Summary,
+		}
+	}
+	for _, cs := range cons {
+		name, ok := strings.CutPrefix(cs.Name, "inbox-")
+		if !ok {
+			continue
+		}
+		r := rows[name]
+		if r == nil {
+			r = &rosterRow{Name: name}
+			rows[name] = r
+		}
+		r.Pending = cs.Pending
+		if cs.LastDelivery != nil {
+			secs := int64(now.Sub(*cs.LastDelivery).Seconds())
+			r.LastMailSecs = &secs
+		}
+	}
+	// A down inbox with no mail carries nothing a caller can act on — the name
+	// is already known from wherever the caller got it, and "absent from the
+	// roster" says down just as well. Emitting them means 43 dead rows against
+	// 9 live ones on this fleet, growing with the consumer graveyard. Keep the
+	// two rows that mean something: up, or down and holding mail.
+	out := make([]rosterRow, 0, len(rows))
+	for _, r := range rows {
+		if r.Up || r.Pending > 0 {
+			out = append(out, *r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func cmdPeers(args []string) {
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
 	wait := fs.String("wait", "", "block until this agent registers; exit 0 when it does, non-zero on timeout")
 	timeout := fs.Duration("timeout", 30*time.Second, "how long --wait waits")
+	asJSON := fs.Bool("json", false, "one-shot machine-readable roster: presence UNION inboxes, so down peers holding mail still appear")
 	fs.Parse(args)
 	c := connect()
 	defer c.Close()
@@ -326,6 +388,20 @@ func cmdPeers(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "peers:", err)
 		os.Exit(1)
+	}
+	if *asJSON {
+		cons, err := c.Consumers(context.Background())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "peers --json:", err)
+			os.Exit(1)
+		}
+		out, err := json.Marshal(rosterJSON(list, cons, time.Now()))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "peers --json:", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(out))
+		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "AGENT\tMACHINE\tCWD")
