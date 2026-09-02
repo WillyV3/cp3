@@ -101,7 +101,7 @@ func consumerVerdict(cs peers.ConsumerStatus, now time.Time) string {
 // register). Losing the name to another session is fatal-loud: a silent
 // zombie holder is exactly the flapping bug this exists to prevent.
 func heartbeatOrDie(ctx context.Context, c *peers.Client, agent, session string) {
-	err := c.Heartbeat(ctx, agent, session)
+	err := c.Heartbeat(ctx, agent, session, "")
 	if err == nil {
 		return
 	}
@@ -320,6 +320,7 @@ type rosterRow struct {
 	Machine      string `json:"machine,omitempty"`
 	Cwd          string `json:"cwd,omitempty"`
 	Summary      string `json:"summary,omitempty"`
+	Title        string `json:"title,omitempty"`
 	LastMailSecs *int64 `json:"last_mail_secs,omitempty"`
 }
 
@@ -333,7 +334,7 @@ func rosterJSON(list []peers.Peer, cons []peers.ConsumerStatus, now time.Time) [
 	rows := map[string]*rosterRow{}
 	for _, p := range list {
 		rows[p.Agent] = &rosterRow{
-			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Summary: p.Summary,
+			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Summary: p.Summary, Title: p.Title,
 		}
 	}
 	for _, cs := range cons {

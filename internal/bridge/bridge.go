@@ -56,7 +56,7 @@ func heartbeat(ctx context.Context, cancel context.CancelCauseFunc, c *peers.Cli
 			c.Deregister(context.Background(), p.Agent)
 			return
 		case <-tk.C:
-			err := c.Heartbeat(ctx, p.Agent, p.Session)
+			err := c.Heartbeat(ctx, p.Agent, p.Session, "")
 			if err == nil {
 				continue
 			}

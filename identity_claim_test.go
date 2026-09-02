@@ -21,7 +21,7 @@ func TestHeartbeatOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Owner heartbeats fine.
-	if err := c.Heartbeat(ctx, "astro", "sess-a"); err != nil {
+	if err := c.Heartbeat(ctx, "astro", "sess-a", ""); err != nil {
 		t.Fatalf("owner heartbeat: %v", err)
 	}
 	// Theft: B force-registers (simulates claim-after-TTL; Register is the
@@ -31,12 +31,12 @@ func TestHeartbeatOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A's next heartbeat must refuse to fight.
-	err := c.Heartbeat(ctx, "astro", "sess-a")
+	err := c.Heartbeat(ctx, "astro", "sess-a", "")
 	if !errors.Is(err, ErrNameLost) {
 		t.Fatalf("stale owner heartbeat: want ErrNameLost, got %v", err)
 	}
 	// B keeps heartbeating undisturbed.
-	if err := c.Heartbeat(ctx, "astro", "sess-b"); err != nil {
+	if err := c.Heartbeat(ctx, "astro", "sess-b", ""); err != nil {
 		t.Fatalf("new owner heartbeat: %v", err)
 	}
 	// The record must still be B's (A's failed heartbeat wrote nothing).

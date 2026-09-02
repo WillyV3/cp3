@@ -60,7 +60,13 @@ type Peer struct {
 	Cwd     string `json:"cwd"`
 	Session string `json:"session"`
 	Summary string `json:"summary,omitempty"`
-	TS      int64  `json:"ts"`
+	// Title is harvested from the agent's own terminal title, NOT set by the
+	// agent. Kept separate from Summary on purpose: Summary means the agent
+	// deliberately told its peers something, Title is a UI string scraped off
+	// a pane and may lag the real work. Conflating "agent said" with
+	// "terminal said" is the same class of error as ack-without-injection.
+	Title string `json:"title,omitempty"`
+	TS    int64  `json:"ts"`
 }
 
 // Message is a peer-to-peer message payload.
@@ -383,7 +389,11 @@ var ErrNameLost = errors.New("agent name now held by another session")
 // the record's session must match, and the write is a revision-CAS update so
 // a racing claim can't be silently overwritten. session "" skips the
 // ownership check (bare CLI use).
-func (c *Client) Heartbeat(ctx context.Context, agent, session string) error {
+//
+// title is written inside the same CAS update as TS — a separate write would
+// race the revision check. "" clears it, so a title that goes stale or starts
+// echoing the agent name self-heals within one interval.
+func (c *Client) Heartbeat(ctx context.Context, agent, session, title string) error {
 	kv, err := c.kvBucket(ctx)
 	if err != nil {
 		return err
@@ -399,6 +409,7 @@ func (c *Client) Heartbeat(ctx context.Context, agent, session string) error {
 	if session != "" && p.Session != session {
 		return fmt.Errorf("%s held by session %s on %s: %w", agent, p.Session, p.Machine, ErrNameLost)
 	}
+	p.Title = title
 	p.TS = nowMillis()
 	val, err := json.Marshal(p)
 	if err != nil {

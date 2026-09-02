@@ -454,7 +454,7 @@ func (s *server) heartbeat(ctx context.Context) {
 			if cur == "" {
 				continue // ephemeral: nothing to keep alive yet
 			}
-			err := s.c.Heartbeat(ctx, cur, s.session)
+			err := s.c.Heartbeat(ctx, cur, s.session, s.paneTitle())
 			if err == nil {
 				continue
 			}
@@ -660,6 +660,13 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			fmt.Fprintf(&b, "\n%s on %s%s\n  CWD: %s\n", label, p.Machine, self, p.Cwd)
 			if p.Summary != "" {
 				fmt.Fprintf(&b, "  Summary: %s\n", p.Summary)
+			}
+			// Labelled distinctly from Summary: this is scraped off that
+			// agent's terminal, not something it chose to tell you, and it can
+			// lag the work. Shown anyway — it is the only signal at all for the
+			// ~89% of peers that never call set_summary.
+			if p.Title != "" {
+				fmt.Fprintf(&b, "  Terminal: %s\n", p.Title)
 			}
 		}
 		toolText(s.t, id, "%s", b.String())
