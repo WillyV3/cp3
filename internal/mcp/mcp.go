@@ -247,6 +247,7 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 				// is precisely how the xps island hid for two hours.
 				fmt.Fprintf(os.Stderr, "[cp3-mcp] remembered identity %q unavailable here (%v); claiming fresh\n", prev, err)
 				name, source := peers.ResolveIdentity(e.cwd, e.asName)
+				name, source = preferTeammateName(name, source)
 				if name != "" {
 					s.configured = name
 					s.me = claimIdentity(ctx, c, peers.Peer{Agent: name, Machine: s.machine, Cwd: s.cwd, Session: s.session}, source)
@@ -254,6 +255,7 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 			}
 		} else {
 			name, source := peers.ResolveIdentity(e.cwd, e.asName)
+			name, source = preferTeammateName(name, source)
 			s.configured = name
 			s.me = name
 			s.me = claimIdentity(ctx, c, s.peer(), source)

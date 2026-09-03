@@ -108,7 +108,16 @@ func statusLine(configured, claimed, session, cwd, machine string, list []peers.
 		line = paint(on, cGreen, "●") + " " + paint(on, cBold, shown) +
 			paint(on, cDim, fmt.Sprintf(" · %d peers", len(list)))
 		if configured != "" && shown != configured {
-			line += paint(on, cDim, " · ") + paint(on, cYellow, "⚠ wanted "+configured)
+			// This is tryReclaim's territory, not a fault: the session is on
+			// a fallback name and quietly retries for `configured` every
+			// heartbeat (mcp.go), taking it back the moment it frees up. A
+			// warning glyph here reads as "N things are broken" the instant
+			// two sessions share a project dir on purpose — an Agent Team
+			// tmux teammate, a second terminal, a codex+claude pair on the
+			// same repo — which is normal multiplicity, not drift. Same
+			// soft-yellow, no-glyph treatment as "with" below, which already
+			// treats legitimate co-location this way.
+			line += paint(on, cDim, " · prefers ") + paint(on, cYellow, configured)
 		}
 	}
 	if noChannel {

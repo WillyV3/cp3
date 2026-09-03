@@ -46,7 +46,7 @@ func TestStatusLine(t *testing.T) {
 				{Agent: "jim-omarchy", Cwd: "/w", Machine: "omarchy", Session: "s-new"}, // me
 				{Agent: "keeper", Cwd: "/w", Session: "s-keeper"},
 			}, 0, nil,
-			"● jim-omarchy · 3 peers · ⚠ wanted jim · with jim, keeper"},
+			"● jim-omarchy · 3 peers · prefers jim · with jim, keeper"},
 		// Willy's cd-flip bug: session is jim (state file says claimed=jim,
 		// wanted=jim), but the session has WANDERED into the claude-daemon
 		// repo whose .claude-peers-agent says "investigate" — and investigate
@@ -62,6 +62,32 @@ func TestStatusLine(t *testing.T) {
 	for _, c := range cases {
 		if got := statusLine(c.conf, c.claimed, c.session, c.cwd, c.machine, c.list, c.pending, false, c.err); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Willy's finding: 6 coding-agent sessions (tmux teammates, or just several
+// terminals) open in one project dir all fall back off the shared
+// .claude-peers-agent name, and every one of them shows a divergence between
+// configured and claimed. That divergence is tryReclaim actively working, not
+// an incident, so the line must read as calm, unstyled information for EVERY
+// fallback session in the group — never a warning glyph, regardless of how
+// many siblings share the dir.
+func TestStatusLineTeamMultiplicityIsNotAlarming(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	list := []peers.Peer{
+		{Agent: "astrobot", Cwd: "/w", Session: "s-0"},
+		{Agent: "astrobot-s1", Cwd: "/w", Session: "s-1"},
+		{Agent: "astrobot-s2", Cwd: "/w", Session: "s-2"},
+		{Agent: "astrobot-s3", Cwd: "/w", Session: "s-3"},
+	}
+	for i, claimed := range []string{"astrobot-s1", "astrobot-s2", "astrobot-s3"} {
+		got := statusLine("astrobot", claimed, "s-"+claimed[len(claimed)-1:], "/w", "", list, 0, false, nil)
+		if strings.Contains(got, "⚠") {
+			t.Errorf("sibling %d (%s): warning glyph on expected multiplicity: %q", i, claimed, got)
+		}
+		if !strings.Contains(got, "prefers astrobot") {
+			t.Errorf("sibling %d (%s): lost the wanted-name info entirely: %q", i, claimed, got)
 		}
 	}
 }

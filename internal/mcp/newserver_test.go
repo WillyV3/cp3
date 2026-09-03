@@ -100,6 +100,40 @@ func TestNewServerIdentity(t *testing.T) {
 	})
 }
 
+// The astrobot fossil record, reproduced and fixed: N tmux teammates spawned
+// into the SAME project dir all inherit the same .claude-peers-agent marker.
+// Without team-name resolution this collides N ways and leaves fallback
+// suffixes (astrobot-s-14, -18, -20... 11 of them, still in the graveyard on
+// the live fleet). A detected teammate must claim its OWN team-assigned name
+// instead of ever touching the shared marker.
+func TestNewServerPrefersTeammateNameOverSharedDirMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c := newTestClient(t)
+	dir := t.TempDir() + "/astrobot"
+	if err := mkdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/.claude-peers-agent", []byte("astrobot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The lead already claimed the shared marker name, exactly as it would
+	// have by the time a teammate spawns.
+	if err := c.Register(context.Background(), peers.Peer{Agent: "astrobot", Machine: "testbox", Cwd: dir, Session: "lead-session"}); err != nil {
+		t.Fatal(err)
+	}
+	writeTeamConfig(t, "pipeline-overhaul", [2]string{"graph-agent", "%134"})
+	t.Setenv("TMUX_PANE", "%134")
+
+	s, _ := newServer(context.Background(), c, &transport{out: &bytes.Buffer{}}, envFor(dir, 9001))
+
+	if s.me != "graph-agent" {
+		t.Errorf("got %q, want the team-assigned name graph-agent (not a marker collision suffix)", s.me)
+	}
+	if s.configured != s.me {
+		t.Errorf("claimed its own name directly, should have no drift: configured=%q me=%q", s.configured, s.me)
+	}
+}
+
 // Spool replay: the rover fix. A message received by a dead process must be
 // returned for replay, and drained so it cannot double-deliver.
 func TestNewServerSpoolReplay(t *testing.T) {

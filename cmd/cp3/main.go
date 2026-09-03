@@ -396,11 +396,11 @@ func cmdPeers(args []string) {
 			fmt.Fprintln(os.Stderr, "peers --json:", err)
 			os.Exit(1)
 		}
-		out, err := json.Marshal(rosterJSON(list, cons, time.Now()))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "peers --json:", err)
-			os.Exit(1)
-		}
+		// rosterRow is a plain internal struct (strings/bool/uint64/*int64,
+		// no cycles) — Marshal cannot fail on it. Checking anyway would be
+		// error handling for an error that can't exist; internal/mcp's
+		// sessionState marshal (statefile.go) makes the same call.
+		out, _ := json.Marshal(rosterJSON(list, cons, time.Now()))
 		fmt.Println(string(out))
 		return
 	}
