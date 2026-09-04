@@ -26,8 +26,8 @@ type teamConfig struct {
 //
 // Why this beats the shared-directory default: a tmux teammate is launched
 // fresh into the same project dir as its lead, so ordinary zero-config
-// resolution (peers.ResolveIdentity) reads the SAME .claude-peers-agent
-// marker the lead already holds — confirmed live on this fleet, where a
+// resolution (peers.ResolveIdentity) reads the SAME identity marker file
+// the lead already holds — confirmed live on this fleet, where a
 // single team spawning N teammates in one dir produced N collisions against
 // that one marker (11 dead inbox-astrobot-s-NN consumers are the fossil
 // record). Claude Code already solved the naming problem when it spawned the

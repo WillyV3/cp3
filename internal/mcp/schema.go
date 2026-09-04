@@ -56,7 +56,7 @@ var toolSchemas = []map[string]any{
 const instructions = `You are connected to the claude-peers network (v3, NATS-native). Other coding-agent sessions across the fleet can see you and send you messages.
 
 IDENTITY:
-- Your identity is your "agent name" — declared at startup via --as, CLAUDE_PEERS_AGENT, or a .claude-peers-agent file. Without one you are ephemeral: visible in list_peers but not addressable by name.
+- Your identity is your "agent name" — declared at startup via --as, CLAUDE_PEERS_AGENT, or a .cp3-peer-name file. Without one you are ephemeral: visible in list_peers but not addressable by name.
 - Agent names are globally unique while held. A live holder keeps the name; a dead session's name frees automatically.
 
 MESSAGING:

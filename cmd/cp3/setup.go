@@ -117,7 +117,7 @@ func defaultSettingsPath() string {
 
 func cmdSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
-	agent := fs.String("agent", "", "fixed peer name (omit for per-session identity via CLAUDE_PEERS_AGENT / .claude-peers-agent)")
+	agent := fs.String("agent", "", "fixed peer name (omit for per-session identity via CLAUDE_PEERS_AGENT / .cp3-peer-name)")
 	mcp := fs.String("mcp", defaultMCPPath(), "MCP config file to merge the claude-peers server into")
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
 	settings := fs.String("settings", defaultSettingsPath(), "Claude settings.json for the statusline (set only when none exists)")
@@ -145,7 +145,7 @@ func cmdSetup(args []string) {
 	})
 	// Secrets are deliberately NOT written here — the token resolves at runtime
 	// from NATS_TOKEN / NATS_TOKEN_FILE / ~/.config/cp3/token. And the agent
-	// name is usually per-session (dir identity, env, or .claude-peers-agent
+	// name is usually per-session (dir identity, env, or .cp3-peer-name
 	// file), not baked into shared config where every session would collide.
 	env := map[string]any{}
 	if natsExplicit {
@@ -194,7 +194,7 @@ func cmdSetup(args []string) {
 	fmt.Println()
 	fmt.Println("Token: put the fleet token in ~/.config/cp3/token (0600) — never in config/argv.")
 	fmt.Println("Launch: cp3 run --as <name>   (execs claude with the peers dev-channel loaded;")
-	fmt.Println("        or rely on a .claude-peers-agent file in the project dir)")
+	fmt.Println("        or rely on a .cp3-peer-name file in the project dir)")
 }
 
 // cmdRun execs the real `claude` with the dev-channel flag injected. --as/--name

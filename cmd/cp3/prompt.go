@@ -13,7 +13,7 @@ import (
 const agentPrompt = `## Peer network (cp3)
 
 You are on a peer network with other coding agents. Your name is this
-directory's name unless CLAUDE_PEERS_AGENT or a .claude-peers-agent file says
+directory's name unless CLAUDE_PEERS_AGENT or a .cp3-peer-name file says
 otherwise.
 
 - See who's online: run ` + "`cp3 peers`" + ` (name, machine, working directory).

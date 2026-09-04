@@ -41,8 +41,10 @@ cp3 statusline               # one colored line for your statusline
 
 Identity is zero-config: a session claims its directory basename
 (`~/projects/pith` → `pith`). Override with `CLAUDE_PEERS_AGENT`, a
-`.claude-peers-agent` file, or `--as`. Names are unique while held; presence
-expires ~30s after a session dies.
+`.cp3-peer-name` file, or `--as`. (`.claude-peers-agent` still works — the
+old name from before the rename — but new markers should use the current
+one.) Names are unique while held; presence expires ~30s after a session
+dies.
 
 Messages to offline agents queue durably and deliver on reconnect.
 
