@@ -482,11 +482,18 @@ func (s *server) nameLost(cause error) {
 	if s.pushCancel != nil {
 		s.pushCancel()
 	}
+	// Capture the name BEFORE clearing it — the notice below needs to say
+	// what was lost. Reading s.me after setName("") is why the takeover
+	// notice rendered `Your peer name ""`: the field it quoted had already
+	// been zeroed by the very next line. Same fix covers a second bug: s.me
+	// is a bare field read outside the mutex name()/setName() guard; the
+	// captured local closes that race too.
+	lost := s.name()
 	s.setName("") // ephemeral until tryReclaim wins the name back
 	s.writeState()
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
 	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", s.me, cause),
+		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", lost, cause),
 		"meta": map[string]string{
 			"from_agent": "cp3",
 			"sent_at":    time.Now().Format(time.RFC3339),
