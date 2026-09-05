@@ -339,6 +339,19 @@ func Run() {
 		// trying to pick it up as soon as it frees (zero-touch repair).
 		go s.heartbeat(ctx)
 	}
+	if s.me == "" && s.configured != "" {
+		// Ephemeral from birth: claimIdentity already logged this to
+		// stderr, which nobody watches in a live TUI session. A session
+		// that's silently off the roster is worse than one that fails to
+		// start — the same principle nameLost already applies to a
+		// mid-session loss, this is its startup-collision counterpart.
+		// Delayed like the spool replay above: Claude Code's channel
+		// listener isn't ready the instant this MCP server starts.
+		go func(name string) {
+			time.Sleep(replayDelay)
+			s.notifyStartupCollision(name)
+		}(s.configured)
+	}
 
 	// Laptop wake / server bounce: re-assert presence the moment the
 	// connection returns.
@@ -494,6 +507,22 @@ func (s *server) nameLost(cause error) {
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
 	s.t.notify("notifications/claude/channel", map[string]any{
 		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", lost, cause),
+		"meta": map[string]string{
+			"from_agent": "cp3",
+			"sent_at":    time.Now().Format(time.RFC3339),
+		},
+	})
+}
+
+// notifyStartupCollision is nameLost's counterpart for the case where this
+// session never held a name at all: claimIdentity lost the race at boot.
+// Kept as a separate message rather than reusing nameLost's — the two
+// describe different transitions (a name taken away vs. one that was never
+// available) and folding them into one generic string would make one of the
+// two lie about what happened.
+func (s *server) notifyStartupCollision(name string) {
+	s.t.notify("notifications/claude/channel", map[string]any{
+		"content": fmt.Sprintf("Your peer name %q is currently held by another session. You are running unnamed for now — messages sent to you will not arrive until this claims the name. You can still send. No action needed: this session keeps watching and will claim it automatically the moment it frees.", name),
 		"meta": map[string]string{
 			"from_agent": "cp3",
 			"sent_at":    time.Now().Format(time.RFC3339),

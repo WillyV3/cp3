@@ -42,3 +42,32 @@ func TestNameLostNoticeNamesTheLostIdentity(t *testing.T) {
 		t.Errorf("session should go ephemeral (nameless) until tryReclaim wins it back, got %q", s.name())
 	}
 }
+
+// The other half of the same field report: a session that never holds a
+// name at all (loses the race at boot, via claimIdentity) got NO channel
+// notification whatsoever — claimIdentity only logs to stderr, which nobody
+// watches in a live TUI session. Silently nameless is worse than failing
+// loud; this is nameLost's missing startup-time counterpart.
+func TestStartupCollisionNoticeNamesTheWantedIdentity(t *testing.T) {
+	var out bytes.Buffer
+	s := &server{t: &transport{out: &out}}
+
+	s.notifyStartupCollision("inspiron-omarchy-main")
+
+	var note struct {
+		Params struct {
+			Content string `json:"content"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &note); err != nil {
+		t.Fatalf("notify wrote unparseable JSON-RPC: %v\nraw: %s", err, out.String())
+	}
+	if !strings.Contains(note.Params.Content, `peer name "inspiron-omarchy-main" is currently held`) {
+		t.Errorf("notice does not name the wanted identity: %s", note.Params.Content)
+	}
+	// Must not borrow nameLost's "stopped receiving" framing — this session
+	// never had reachability to lose.
+	if strings.Contains(note.Params.Content, "stopped receiving") {
+		t.Errorf("startup notice falsely implies it was previously reachable: %s", note.Params.Content)
+	}
+}
