@@ -56,6 +56,38 @@ func createSession(ctx context.Context) (string, error) {
 	return out.Data.ID, nil
 }
 
+// verifySession confirms an existing opencode session id is real before the
+// bridge commits to it — a typo'd or stale id would otherwise surface as a
+// confusing 404 on the first inject() instead of a clear failure at startup.
+func verifySession(ctx context.Context, session string) error {
+	req, _ := http.NewRequestWithContext(ctx, "GET", ocURL+"/api/session/"+session, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("opencode session %s: status %d", session, resp.StatusCode)
+	}
+	return nil
+}
+
+// resolveSession picks the session inject() will post into. OPENCODE_SESSION_ID
+// targets an EXISTING session — the interactive TUI's own live conversation,
+// so peer messages land where a human is actually looking, matching the
+// Claude Code experience of messages appearing in the session you're in.
+// Unset (the default) keeps the original behavior: a fresh, dedicated session
+// nobody else is watching.
+func resolveSession(ctx context.Context) (string, error) {
+	if id := os.Getenv("OPENCODE_SESSION_ID"); id != "" {
+		if err := verifySession(ctx, id); err != nil {
+			return "", fmt.Errorf("OPENCODE_SESSION_ID=%s: %w", id, err)
+		}
+		return id, nil
+	}
+	return createSession(ctx)
+}
+
 func inject(ctx context.Context, session, actual string, m peers.Message) error {
 	delivery := "queue"
 	if m.DeliverAs == "steer" {
@@ -96,12 +128,16 @@ func Run() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	session, err := createSession(ctx)
+	session, err := resolveSession(ctx)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "[cp3-opencode] create session:", err)
+		fmt.Fprintln(os.Stderr, "[cp3-opencode] session:", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "[cp3-opencode] %s on session %s at %s\n", name, session, ocURL)
+	joined := ""
+	if os.Getenv("OPENCODE_SESSION_ID") != "" {
+		joined = " (joined existing)"
+	}
+	fmt.Fprintf(os.Stderr, "[cp3-opencode] %s on session %s%s at %s\n", name, session, joined, ocURL)
 
 	cwd, _ := os.Getwd()
 	host, _ := os.Hostname()
