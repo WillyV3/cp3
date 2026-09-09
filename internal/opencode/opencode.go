@@ -56,13 +56,13 @@ func createSession(ctx context.Context) (string, error) {
 	return out.Data.ID, nil
 }
 
-func inject(ctx context.Context, session string, m peers.Message) error {
+func inject(ctx context.Context, session, actual string, m peers.Message) error {
 	delivery := "queue"
 	if m.DeliverAs == "steer" {
 		delivery = "steer"
 	}
 	body, _ := json.Marshal(map[string]any{
-		"prompt":   map[string]string{"text": fmt.Sprintf("[peer message from %s — to reply, run: cp3 send --to %s \"...\"]\n%s", m.From, m.From, m.Content)},
+		"prompt":   map[string]string{"text": bridge.ReplyHint(actual, m.From) + "\n" + m.Content},
 		"delivery": delivery,
 	})
 	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/api/session/"+session+"/prompt", bytes.NewReader(body))
@@ -106,7 +106,7 @@ func Run() {
 	cwd, _ := os.Getwd()
 	host, _ := os.Hostname()
 	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("oc-%d", os.Getpid())}
-	if err := bridge.Run(ctx, c, p, func(m peers.Message) error { return inject(ctx, session, m) }); err != nil {
+	if err := bridge.Run(ctx, c, p, func(actual string, m peers.Message) error { return inject(ctx, session, actual, m) }); err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3-opencode] run:", err)
 		os.Exit(1)
 	}

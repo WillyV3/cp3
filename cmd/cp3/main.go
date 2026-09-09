@@ -204,7 +204,7 @@ func cmdSubscribe(args []string) {
 	defer stop()
 	enc := json.NewEncoder(os.Stdout)
 	p := peers.Peer{Agent: *agent, Machine: *machine, Cwd: *cwd, Session: fmt.Sprintf("sub-%d", os.Getpid())}
-	err := bridge.Run(ctx, c, p, func(m peers.Message) error {
+	err := bridge.Run(ctx, c, p, func(_ string, m peers.Message) error {
 		return enc.Encode(m) // one JSON message per line, flushed by Encode
 	})
 	if err != nil {

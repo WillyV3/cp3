@@ -179,11 +179,11 @@ func (s *appServer) request(method string, params map[string]any) (json.RawMessa
 }
 
 // deliver injects one peer message: steer the active turn, else start one.
-func (s *appServer) deliver(m peers.Message) error {
+func (s *appServer) deliver(actual string, m peers.Message) error {
 	s.mu.Lock()
 	thread, turn := s.thread, s.turn
 	s.mu.Unlock()
-	text := fmt.Sprintf("[peer message from %s — to reply, run: cp3 send --to %s \"...\"]\n%s", m.From, m.From, m.Content)
+	text := bridge.ReplyHint(actual, m.From) + "\n" + m.Content
 	input := []map[string]any{{"type": "text", "text": text}}
 	if turn != "" {
 		_, err := s.request("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": turn})
