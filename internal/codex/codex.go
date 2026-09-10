@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,14 @@ type appServer struct {
 }
 
 // Run connects the network and the app-server; blocks until interrupted.
-func Run() {
+// --as pins the peer name; unset, identity falls through peers.ResolveIdentity
+// same as every other adapter (env, .cp3-peer-name file, dir name) — opening a
+// new peer on a new box never needs more than `cp3 codex` or `cp3 codex --as X`.
+func Run(args []string) {
+	fs := flag.NewFlagSet("codex", flag.ExitOnError)
+	as := fs.String("as", "", "peer name (overrides CLAUDE_PEERS_AGENT / .cp3-peer-name)")
+	fs.Parse(args)
+
 	c, err := boot.Connect()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[cp3 codex] connect:", err)
@@ -95,7 +103,7 @@ func Run() {
 
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	name, _ := peers.ResolveIdentity(cwd, "")
+	name, _ := peers.ResolveIdentity(cwd, *as)
 	if name == "" {
 		name = "codex-agent"
 	}

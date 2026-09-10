@@ -3,10 +3,12 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withServer points the package's opencode client at a test server for the
@@ -92,5 +94,54 @@ func TestResolveSessionRejectsUnknownExistingID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ses_gone") {
 		t.Errorf("error should name the bad id, got: %v", err)
+	}
+}
+
+// setOCURL points ocURL at addr for the duration of the test — same override
+// pattern as withServer, for the plain-TCP checks that don't need a fake
+// opencode HTTP server, just something (or nothing) listening.
+func setOCURL(t *testing.T, addr string) {
+	t.Helper()
+	old := ocURL
+	ocURL = "http://" + addr
+	t.Cleanup(func() { ocURL = old })
+}
+
+// The one-word-start path (Run's auto-serve) decides whether to spawn
+// `opencode serve` based on this: nothing listening -> spawn. Wrong in
+// either direction is a real bug — spawn-when-already-up wastes a port and
+// orphans a process; never-detect-listening breaks the whole feature.
+func TestServerUpDetectsListener(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setOCURL(t, ln.Addr().String())
+	if !serverUp(context.Background()) {
+		t.Error("serverUp false with a real listener present")
+	}
+	ln.Close()
+	if serverUp(context.Background()) {
+		t.Error("serverUp true after the listener closed")
+	}
+}
+
+// waitForServer must give up on a real timeout, not hang — the caller
+// (Run) treats "never came up" as a hard startup failure, not a silent stall.
+func TestWaitForServerTimesOutWhenNothingListens(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing answers here now
+	setOCURL(t, addr)
+
+	start := time.Now()
+	if waitForServer(context.Background(), 400*time.Millisecond) {
+		t.Fatal("waitForServer reported success against a closed port")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("waitForServer took %v to give up on a 400ms timeout", elapsed)
 	}
 }

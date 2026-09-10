@@ -71,9 +71,9 @@ func main() {
 	case "mcp":
 		mcp.Run()
 	case "opencode":
-		opencode.Run()
+		opencode.Run(os.Args[2:])
 	case "codex":
-		codex.Run()
+		codex.Run(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
