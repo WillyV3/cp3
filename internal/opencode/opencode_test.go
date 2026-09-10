@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -144,4 +146,43 @@ func TestWaitForServerTimesOutWhenNothingListens(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("waitForServer took %v to give up on a 400ms timeout", elapsed)
 	}
+}
+
+// Real incident (2026-09-10): opencode serve died instantly on a config
+// validation error, but Run's timeout handler only printed a bare "did not
+// come up" — the actual reason sat silently in serveLogPath() the whole
+// time. spawnOpencodeServe must capture a child's stderr there even when the
+// child never manages to listen at all, or that fix has nothing to read.
+func TestSpawnOpencodeServeCapturesChildStderrOnInstantFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // serveLogPath lives under boot.DataDir() == $HOME/.local/share/cp3
+	fake := writeFakeOpencodeBin(t, `#!/bin/sh
+echo "Configuration is invalid at /home/willy/.config/opencode/opencode.json" >&2
+exit 1
+`)
+	old := opencodeBin
+	opencodeBin = fake
+	t.Cleanup(func() { opencodeBin = old })
+
+	cmd, err := spawnOpencodeServe()
+	if err != nil {
+		t.Fatalf("spawnOpencodeServe: %v", err)
+	}
+	cmd.Wait() // the fake exits immediately; real spawnOpencodeServe never waits itself
+
+	b, err := os.ReadFile(serveLogPath())
+	if err != nil {
+		t.Fatalf("serve log: %v", err)
+	}
+	if !strings.Contains(string(b), "Configuration is invalid") {
+		t.Errorf("serve log missing the child's failure output, got: %q", b)
+	}
+}
+
+func writeFakeOpencodeBin(t *testing.T, script string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

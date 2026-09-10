@@ -34,7 +34,10 @@ func env(k, def string) string {
 }
 
 var (
-	ocURL  = env("OPENCODE_URL", "http://127.0.0.1:4096")
+	ocURL = env("OPENCODE_URL", "http://127.0.0.1:4096")
+	// opencodeBin is a var (not a literal exec.Command("opencode", ...) call)
+	// so tests can point it at a fake binary without touching the real one.
+	opencodeBin = "opencode"
 	// 120s, not 30s: verified live that a machine's FIRST-EVER `opencode serve`
 	// pays a one-time provider-package install cost during the FIRST
 	// /api/session call — the TCP port accepts connections immediately
@@ -148,11 +151,11 @@ func spawnOpencodeServe() (*exec.Cmd, error) {
 	if err := os.MkdirAll(boot.DataDir(), 0o700); err != nil {
 		return nil, err
 	}
-	logf, err := os.OpenFile(filepath.Join(boot.DataDir(), "opencode-serve.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logf, err := os.OpenFile(serveLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("opencode", "serve", "--hostname", host, "--port", port)
+	cmd := exec.Command(opencodeBin, "serve", "--hostname", host, "--port", port)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	if err := cmd.Start(); err != nil {
 		logf.Close()
@@ -160,6 +163,13 @@ func spawnOpencodeServe() (*exec.Cmd, error) {
 	}
 	go func() { cmd.Wait(); logf.Close() }() // reap; also closes the log fd once it exits
 	return cmd, nil
+}
+
+// serveLogPath is where spawnOpencodeServe's child logs go — a fixed,
+// deterministic path (not returned per-call) so a timeout handler that never
+// got a live *exec.Cmd back can still go read it.
+func serveLogPath() string {
+	return filepath.Join(boot.DataDir(), "opencode-serve.log")
 }
 
 // waitForServer polls serverUp until it answers or timeout/ctx elapses.
@@ -247,6 +257,15 @@ func Run(args []string) {
 		serveCmd = cmd
 		if !waitForServer(ctx, 10*time.Second) {
 			fmt.Fprintln(os.Stderr, "[cp3-opencode] opencode serve did not come up at", ocURL)
+			// Real incident (2026-09-10): a config validation error (schema
+			// version skew) killed the child instantly, but a bare timeout
+			// here gave no hint why — the actual reason was sitting silently
+			// in its log the whole time. Surface it so the diagnosis is not
+			// invisible.
+			if b, err := os.ReadFile(serveLogPath()); err == nil && len(b) > 0 {
+				fmt.Fprintln(os.Stderr, "[cp3-opencode] opencode serve output:")
+				os.Stderr.Write(b)
+			}
 			stopServe()
 			os.Exit(1)
 		}
@@ -279,7 +298,7 @@ func Run(args []string) {
 		return
 	}
 
-	attach := exec.Command("opencode", "attach", ocURL, "--session", session)
+	attach := exec.Command(opencodeBin, "attach", ocURL, "--session", session)
 	attach.Stdin, attach.Stdout, attach.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := attach.Run()
 	cancel()
