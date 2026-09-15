@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,14 +39,13 @@ var (
 	// opencodeBin is a var (not a literal exec.Command("opencode", ...) call)
 	// so tests can point it at a fake binary without touching the real one.
 	opencodeBin = "opencode"
-	// 120s, not 30s: verified live that a machine's FIRST-EVER `opencode serve`
-	// pays a one-time provider-package install cost during the FIRST
-	// /api/session call — the TCP port accepts connections immediately
-	// (serverUp is not enough to prove the server can do real work yet), but
-	// createSession hit the old 30s ceiling and failed with a deadline
-	// exceeded; a second server on the same warmed machine created a session
-	// in 60ms. Exactly the case a fresh-box one-word start must survive.
-	client = &http.Client{Timeout: 120 * time.Second}
+	client = &http.Client{Timeout: 30 * time.Second}
+	// createAttempt bounds ONE createSession request. Measured 2026-09-15:
+	// opencode serve accepts TCP at ~0.8s but serves HTTP at ~1.9s, and a
+	// request that lands in that window is never answered — while a request
+	// after readiness returns in ~25ms. A stray orphan must cost seconds, not
+	// the whole client timeout. Var so tests can shrink it.
+	createAttempt = 5 * time.Second
 )
 
 // createSession opens one opencode session. OPENCODE_MODEL, if set, pins
@@ -61,11 +61,26 @@ func createSession(ctx context.Context) (string, error) {
 		payload["model"] = map[string]string{"providerID": provider, "id": id}
 	}
 	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/api/session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
+	// Retry until ctx gives up: an orphaned early request (see createAttempt)
+	// times out fast and the next attempt lands on a ready server.
+	var resp *http.Response
+	for {
+		actx, cancel := context.WithTimeout(ctx, createAttempt)
+		req, _ := http.NewRequestWithContext(actx, "POST", ocURL+"/api/session", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r, err := client.Do(req)
+		if err == nil {
+			resp = r
+			defer cancel()
+			break
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return "", err
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -172,14 +187,30 @@ func serveLogPath() string {
 	return filepath.Join(boot.DataDir(), "opencode-serve.log")
 }
 
-// waitForServer polls serverUp until it answers or timeout/ctx elapses.
+// serverReady is the HTTP-level readiness check: GET /api/session answers
+// 2xx. Distinct from serverUp on purpose — serverUp (TCP) decides whether
+// to SPAWN (a mid-boot server must not be mistaken for "nothing there" and
+// double-spawned onto the same port); this decides whether to SEND.
+func serverReady(ctx context.Context) bool {
+	pctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(pctx, "GET", ocURL+"/api/session", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// waitForServer polls serverReady until it answers or timeout/ctx elapses.
 func waitForServer(ctx context.Context, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return false
 		}
-		if serverUp(ctx) {
+		if serverReady(ctx) {
 			return true
 		}
 		time.Sleep(150 * time.Millisecond)
@@ -187,16 +218,20 @@ func waitForServer(ctx context.Context, timeout time.Duration) bool {
 	return false
 }
 
+// inject fires the peer message into the session as a new turn via
+// /session/{id}/prompt_async: returns immediately (204), the server runs the
+// turn with the session's own model, and an attached TUI renders both the
+// injected text and the reply via its event stream — verified live on
+// opencode 1.18.31 (2026-09-15). NOT /api/session/{id}/prompt: that route
+// "durably admits" the input but on 1.18.x nothing ever executed it and the
+// TUI showed nothing, for hours, on two sessions. It also carried the
+// steer/queue distinction; prompt_async has no such field, so DeliverAs is
+// not honored for opencode.
 func inject(ctx context.Context, session, actual string, m peers.Message) error {
-	delivery := "queue"
-	if m.DeliverAs == "steer" {
-		delivery = "steer"
-	}
 	body, _ := json.Marshal(map[string]any{
-		"prompt":   map[string]string{"text": bridge.ReplyHint(actual, m.From) + "\n" + m.Content},
-		"delivery": delivery,
+		"parts": []map[string]string{{"type": "text", "text": bridge.ReplyHint(actual, m.From) + "\n" + m.Content}},
 	})
-	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/api/session/"+session+"/prompt", bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/session/"+session+"/prompt_async", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {

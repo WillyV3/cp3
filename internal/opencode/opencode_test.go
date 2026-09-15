@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	peers "github.com/WillyV3/cp3"
 )
 
 // withServer points the package's opencode client at a test server for the
@@ -145,6 +147,94 @@ func TestWaitForServerTimesOutWhenNothingListens(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("waitForServer took %v to give up on a 400ms timeout", elapsed)
+	}
+}
+
+// Measured 2026-09-15: opencode serve accepts TCP ~1.1s before it serves
+// HTTP, and a request in that window is never answered. Readiness must be
+// HTTP-level — a listener that accepts and says nothing is NOT ready, even
+// though serverUp (the spawn decision) correctly reports something there.
+func TestWaitForServerIgnoresTCPOpenButNotServing(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() { // accept and hold every connection, never respond
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	setOCURL(t, ln.Addr().String())
+	if !serverUp(context.Background()) {
+		t.Fatal("serverUp must see the listener (that is the spawn decision)")
+	}
+	if waitForServer(context.Background(), 1500*time.Millisecond) {
+		t.Error("waitForServer reported ready for a listener that never serves HTTP")
+	}
+}
+
+// The other half: even if one create request gets orphaned, the next
+// attempt must land. First request hangs well past createAttempt; the
+// second is answered.
+func TestCreateSessionRetriesPastAnOrphanedRequest(t *testing.T) {
+	t.Setenv("OPENCODE_MODEL", "")
+	old := createAttempt
+	createAttempt = 300 * time.Millisecond
+	t.Cleanup(func() { createAttempt = old })
+
+	var calls int
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			// Orphaned: say nothing until well after the client has given up.
+			// (Not <-r.Context().Done(): the server only notices a vanished
+			// client via a background read that never starts here, so that
+			// would hold the handler — and srv.Close — forever.)
+			time.Sleep(4 * createAttempt)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"id": "ses_second"}})
+	})
+	got, err := createSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ses_second" || calls != 2 {
+		t.Errorf("got %q after %d calls; want ses_second on the 2nd attempt", got, calls)
+	}
+}
+
+// Real incident (2026-09-15): inject used /api/session/{id}/prompt, which on
+// opencode 1.18.31 admitted the input and never ran it — the attached TUI
+// showed nothing. /session/{id}/prompt_async runs the turn and the TUI
+// renders it. Pin the route and the body shape it requires.
+func TestInjectUsesPromptAsyncWithTextPart(t *testing.T) {
+	var gotPath, gotText string
+	withServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		var body struct {
+			Parts []struct{ Type, Text string } `json:"parts"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Parts) == 1 && body.Parts[0].Type == "text" {
+			gotText = body.Parts[0].Text
+		}
+		w.WriteHeader(204)
+	})
+	err := inject(context.Background(), "ses_x", "oc-test", peers.Message{From: "keeper", Content: "hello there"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "POST /session/ses_x/prompt_async" {
+		t.Errorf("route: got %q", gotPath)
+	}
+	if !strings.Contains(gotText, "--from oc-test --to keeper") || !strings.HasSuffix(gotText, "\nhello there") {
+		t.Errorf("text part missing reply hint or content: %q", gotText)
 	}
 }
 
