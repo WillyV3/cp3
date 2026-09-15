@@ -1,6 +1,13 @@
 // cp3-opencode — bridges the claude-peers NATS network to a running opencode
-// server: each inbound peer message is injected as a steered prompt into one
+// server: each inbound peer message is injected as a new turn into one
 // opencode session. Same wall as every adapter — it knows only peers.Client.
+//
+// Two opencode API families are used on purpose, each verified live against
+// 1.18.31 (2026-09-15): create/verify/readiness on /api/session (model key
+// is providerID+id), inject on the root /session/{id}/prompt_async (model key
+// there is providerID+modelID). Do not "unify" them: the /api/.../prompt
+// route admits input without running it, and the root create wants a
+// different body shape.
 package opencode
 
 import (
