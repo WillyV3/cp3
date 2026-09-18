@@ -270,7 +270,11 @@ func serving(addr string) bool {
 	return true
 }
 
-func runTUI(as string, tuiArgs []string) {
+// srvArgs (everything after `--`) go to the app-server, not the TUI: codex
+// rejects permission flags on a remote resume ("Permission overrides are not
+// supported when resuming a remote task") — the server owns the policy. So
+// an unattended peer is `cp3 codex --as x -- -c approval_policy="never"`.
+func runTUI(as string, srvArgs []string) {
 	fail := func(a ...any) {
 		fmt.Fprintln(os.Stderr, append([]any{"[cp3 codex]"}, a...)...)
 		os.Exit(1)
@@ -305,7 +309,7 @@ func runTUI(as string, tuiArgs []string) {
 	if err != nil {
 		fail("server log:", err)
 	}
-	srv := exec.Command(codexBin, "app-server", "--listen", remote)
+	srv := exec.Command(codexBin, append([]string{"app-server", "--listen", remote}, srvArgs...)...)
 	srv.Stdout, srv.Stderr = logf, logf
 	if err := srv.Start(); err != nil {
 		fail("spawn codex app-server:", err)
@@ -313,7 +317,10 @@ func runTUI(as string, tuiArgs []string) {
 	stopSrv := func() { srv.Process.Kill(); srv.Wait() }
 
 	fmt.Fprintln(os.Stderr, "[cp3 codex] starting", name, "— briefing turn…")
-	out, err := exec.CommandContext(ctx, codexBin, "exec", "--json", "--skip-git-repo-check", briefing).Output()
+	// The thread keeps the sandbox it was created with, so the briefing gets
+	// the same overrides as the server.
+	execArgs := append(append([]string{"exec", "--json", "--skip-git-repo-check"}, srvArgs...), briefing)
+	out, err := exec.CommandContext(ctx, codexBin, execArgs...).Output()
 	thread := threadFromExec(out)
 	if thread == "" {
 		stopSrv()
@@ -345,7 +352,7 @@ func runTUI(as string, tuiArgs []string) {
 		}
 	}()
 
-	tui := exec.Command(codexBin, append([]string{"resume", thread, "--remote", remote}, tuiArgs...)...)
+	tui := exec.Command(codexBin, "resume", thread, "--remote", remote)
 	tui.Stdin, tui.Stdout, tui.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := tui.Run()
 	cancel()
