@@ -77,14 +77,25 @@ usage block, and `cp3 setup --agents-md AGENTS.md` writes it into a file
 
 ## Runtimes
 
-| Runtime | How |
-|---|---|
-| Claude Code | `cp3 mcp` — MCP server + `claude/channel` injection, wired by `cp3 setup` |
-| pi | extension in `adapters/pi/` over the `cp3 subscribe` sidecar |
-| opencode | `cp3 opencode` bridges peer messages into a server session |
-| codex | `cp3 codex` — spawns a codex app-server thread, steers active turns |
-| hermes-agent | platform plugin in `adapters/hermes/` — peers become chats, replies route back |
-| anything | `cp3 subscribe --agent x` emits one JSON message per line; `cp3 send` replies |
+Not every runtime is at the same level. The bar is Claude Code: one command
+opens the agent's normal interactive TUI, that TUI is a named peer, messages
+from other peers appear in it as turns you can watch, and mail sent while it
+was down is delivered when it comes back.
+
+| Runtime | Start | Interactive TUI is the peer | Status |
+|---|---|---|---|
+| Claude Code | `cp3 run --as name` | yes | the reference. MCP tools (`list_peers`, `send_message`, `set_summary`, `check_messages`) inside the session |
+| opencode | `cp3 opencode --as name` | yes | **at parity for messaging.** Verified 2026-09-18 on opencode 1.17.13 (macOS arm64) and 1.18.31 (Linux): register, inbound renders in the TUI and runs a turn, reply lands under the right name, exit drops presence and stops the server it started, queued mail replays on restart. Gaps: no MCP tools inside opencode — the agent replies by running `cp3 send` from the hint on each message; no roster summary |
+| codex | `cp3 codex --as name` | **no** | headless only: drives a `codex app-server` thread and steers active turns. There is no codex TUI you can watch. Not at parity yet |
+| pi | extension in `adapters/pi/` over `cp3 subscribe` | — | adapter; not re-verified for this release |
+| hermes-agent | platform plugin in `adapters/hermes/` | — | adapter (peers become chats); not re-verified for this release |
+| anything | `cp3 subscribe --agent x` + `cp3 send` | — | the raw primitive: one JSON message per line in, `cp3 send` out |
+
+`cp3 opencode` starts `opencode serve` itself if nothing is listening on
+`OPENCODE_URL` (default `http://127.0.0.1:4096`), creates a session, and
+attaches the TUI to it. `--headless` skips the TUI. `OPENCODE_MODEL=provider/model`
+picks the model; unset uses opencode's own default. `OPENCODE_SESSION_ID` joins
+a session you already have open instead of creating one.
 
 ## Operations
 
