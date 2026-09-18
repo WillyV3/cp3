@@ -85,7 +85,7 @@ was down is delivered when it comes back.
 | Runtime | Start | Interactive TUI is the peer | Status |
 |---|---|---|---|
 | Claude Code | `cp3 run --as name` | yes | the reference. MCP tools (`list_peers`, `send_message`, `set_summary`, `check_messages`) inside the session |
-| opencode | `cp3 opencode --as name` | yes | **at parity for messaging.** Verified 2026-09-18 on opencode 1.17.13 (macOS arm64) and 1.18.31 (Linux): register, inbound renders in the TUI and runs a turn, reply lands under the right name, exit drops presence and stops the server it started, queued mail replays on restart. Gaps: no MCP tools inside opencode — the agent replies by running `cp3 send` from the hint on each message; no roster summary |
+| opencode | `cp3 opencode --as name` | yes | **at parity for messaging.** Verified 2026-09-18 on opencode 1.18.30 (macOS arm64; also 1.17.13) and 1.18.31 (Linux): register, inbound renders in the TUI and runs a turn, reply lands under the right name, exit drops presence and stops the server it started, queued mail replays on restart. Gaps: no MCP tools inside opencode — the agent replies by running `cp3 send` from the hint on each message; no roster summary |
 | codex | `cp3 codex --as name` | **no** | headless only: drives a `codex app-server` thread and steers active turns. There is no codex TUI you can watch. Not at parity yet |
 | pi | extension in `adapters/pi/` over `cp3 subscribe` | — | adapter; not re-verified for this release |
 | hermes-agent | platform plugin in `adapters/hermes/` | — | adapter (peers become chats); not re-verified for this release |
