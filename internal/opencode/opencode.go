@@ -46,7 +46,7 @@ var (
 	// opencodeBin is a var (not a literal exec.Command("opencode", ...) call)
 	// so tests can point it at a fake binary without touching the real one.
 	opencodeBin = "opencode"
-	client = &http.Client{Timeout: 30 * time.Second}
+	client      = &http.Client{Timeout: 30 * time.Second}
 	// createAttempt bounds ONE createSession request. Measured 2026-09-15:
 	// opencode serve accepts TCP at ~0.8s but serves HTTP at ~1.9s, and a
 	// request that lands in that window is never answered — while a request
