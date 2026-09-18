@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("claude-peers: set CLAUDE_PEERS_AGENT to join the network", "warn")
       return
     }
-    sub = spawn(CP3, ["subscribe", "--agent", ME, "--machine", hostname()], {
+    sub = spawn(CP3, ["subscribe", "--agent", ME, "--machine", hostname(), "--cwd", process.cwd()], {
       stdio: ["ignore", "pipe", "pipe"],
     })
     createInterface({ input: sub.stdout! }).on("line", (line) => {
@@ -44,7 +44,13 @@ ${m.content}`, { deliverAs: "steer" })
     ctx.ui.notify(`claude-peers: ${ME} online`, "info")
   })
 
-  pi.on("session_end", async () => sub?.kill())
+  // The subscriber holds the peer name. If it outlives pi, the name stays "up"
+  // and mail is delivered to nobody. pi's teardown event is session_shutdown
+  // (there is no session_end — that was a silent no-op); the process "exit"
+  // hook covers any path that skips it.
+  const stop = () => { sub?.kill(); sub = undefined }
+  pi.on("session_shutdown", async () => stop())
+  process.on("exit", stop)
 
   pi.registerTool({
     name: "peer_send",
