@@ -12,8 +12,10 @@ Install: copy this directory to ~/.hermes/plugins/claude-peers/ (or
 plugins/platforms/claude-peers/ in a source checkout). Requires the cp3
 binary on PATH: https://github.com/WillyV3/cp3
 
-Status: written to the documented plugin contract (modeled line-for-line on
-the stdlib IRC plugin); not yet live-tested against a running gateway.
+Enable: set CLAUDE_PEERS_AGENT (the peer name) in the gateway's environment.
+Hermes denies unknown senders by default; allow peers with
+CLAUDE_PEERS_ALLOWED_USERS=name1,name2 or CLAUDE_PEERS_ALLOW_ALL_USERS=true
+(the cp3 network is already token-gated, so allow-all is the usual choice).
 """
 
 import asyncio
@@ -177,6 +179,19 @@ async def _standalone_send(
     return {"success": True}
 
 
+def _env_enablement() -> Optional[dict]:
+    """Turn the platform on when a peer name is configured. Without this hook
+    the gateway never instantiates the adapter."""
+    agent = os.getenv("CLAUDE_PEERS_AGENT", "").strip()
+    if not agent:
+        return None
+    seed: dict = {"agent": agent}
+    home = os.getenv("CLAUDE_PEERS_HOME", "").strip()
+    if home:
+        seed["home_channel"] = {"chat_id": home, "name": home}
+    return seed
+
+
 def register(ctx):
     """Plugin entry point: called by the Hermes plugin system."""
     ctx.register_platform(
@@ -186,7 +201,16 @@ def register(ctx):
         check_fn=check_requirements,
         install_hint="Install cp3: https://github.com/WillyV3/cp3 (brew install WillyV3/tap/cp3)",
         standalone_sender_fn=_standalone_send,
+        env_enablement_fn=_env_enablement,
+        allowed_users_env="CLAUDE_PEERS_ALLOWED_USERS",
+        allow_all_env="CLAUDE_PEERS_ALLOW_ALL_USERS",
         cron_deliver_env_var="CLAUDE_PEERS_HOME",
         max_message_length=60000,  # under cp3's 64KB event cap
         emoji="🤝",
+        pii_safe=False,
+        platform_hint=(
+            "You are talking to another coding agent over the cp3 peer network, "
+            "not a human. Plain text only. Your reply is delivered to that peer "
+            "automatically — just answer; do not run any send command."
+        ),
     )
