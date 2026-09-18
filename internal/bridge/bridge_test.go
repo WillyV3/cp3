@@ -144,3 +144,43 @@ func TestBridgePassesActualClaimedNameToInject(t *testing.T) {
 		t.Fatal("inject never called")
 	}
 }
+
+// Real incident (2026-09-18): Run returned while the heartbeat goroutine was
+// still deregistering; the caller then closed the connection and exited, the
+// Deregister died mid-flight, and the name stayed "up" for the full TTL
+// (30s ghost on SIGINT+SIGTERM to `cp3 subscribe`). The contract: by the time
+// Run returns the name is already released, so closing immediately is safe.
+func TestRunReleasesNameBeforeReturning(t *testing.T) {
+	srv := runServer(t)
+	observer, err := peers.Connect(srv.ClientURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(observer.Close)
+	held := func() bool {
+		list, _ := observer.Peers(context.Background())
+		return slices.ContainsFunc(list, func(p peers.Peer) bool { return p.Agent == "leaver" })
+	}
+	for range 25 { // a race: one pass proves little
+		c, err := peers.Connect(srv.ClientURL(), "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(ctx, c, peers.Peer{Agent: "leaver", Machine: "m", Session: "s"}, func(string, peers.Message) error { return nil })
+		}()
+		for deadline := time.Now().Add(3 * time.Second); !held(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("leaver never registered")
+			}
+		}
+		cancel()
+		<-done
+		c.Close() // exactly what cmdSubscribe's deferred Close does on the way out
+		if held() {
+			t.Fatal("name still held after Run returned and the connection closed")
+		}
+	}
+}

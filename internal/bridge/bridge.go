@@ -53,7 +53,14 @@ func Run(ctx context.Context, c *peers.Client, p peers.Peer, inject func(actual 
 		log.Printf("[bridge] name %q taken; running as %q", p.Agent, actual.Agent)
 	}
 	subCtx, cancel := context.WithCancelCause(ctx)
-	go heartbeat(subCtx, cancel, c, actual)
+	// Run must not return before the name is released: callers exit the
+	// process right after, and an un-awaited Deregister loses that race —
+	// the name then stays "up" until its TTL lapses (~30s) and mail sent in
+	// that window reports "delivered" to nobody. Reproduced 2026-09-18 with
+	// SIGINT+SIGTERM to `cp3 subscribe` (30s ghost vs ~100ms on one signal).
+	released := make(chan struct{})
+	go func() { defer close(released); heartbeat(subCtx, cancel, c, actual) }()
+	defer func() { cancel(nil); <-released }()
 	err = c.Subscribe(subCtx, actual.Agent, func(m peers.Message) {
 		if err := inject(actual.Agent, m); err != nil {
 			log.Printf("[bridge] inject from %s failed: %v", m.From, err)
