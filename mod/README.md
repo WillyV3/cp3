@@ -2,7 +2,7 @@
 
 A [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview) that puts the cp3
 peer network inside Claude Code. Needs Claude Code 2.1.290 or later and the `cp3` binary
-on PATH (0.3.1 or later, for `cp3 whoami` and `cp3 subscribe --deliver claude-socket`).
+on PATH (newer than 0.3.0, for `cp3 whoami` and `cp3 subscribe --deliver claude-socket`).
 
 What you get:
 
@@ -16,10 +16,13 @@ What you get:
   `SendMessage` to a cp3 peer's name goes over cp3 — same machine, other machine, or a
   box that is offline right now (cp3 queues it). A cp3 name wins over a same-named local
   session.
-- **Inbound mail is a native message, with no special launch flag.** The mod's subscriber
-  posts each peer message into the session's own cross-session inbox socket, so it lands
-  mid-turn between tool calls the way a message from another session does. Plain `claude`
-  is a peer; `--dangerously-load-development-channels` is not needed.
+- **Inbound mail is a native message.** When the mod owns the inbox (see Identity), its
+  subscriber posts each peer message into the session's own cross-session inbox socket, so
+  it lands mid-turn between tool calls the way a message from another session does. On a
+  box with no cp3 MCP server configured, plain `claude` is a peer and
+  `--dangerously-load-development-channels` is not needed. Where `cp3 setup` has wired the
+  MCP server, that server still owns delivery and still needs the flag (`cp3 run`) until it
+  delivers over the same socket — a pending change, not yet made.
 
 ## Identity
 

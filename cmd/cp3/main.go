@@ -7,12 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -21,6 +18,7 @@ import (
 	peers "github.com/WillyV3/cp3"
 	"github.com/WillyV3/cp3/internal/boot"
 	"github.com/WillyV3/cp3/internal/bridge"
+	"github.com/WillyV3/cp3/internal/claudecode"
 	"github.com/WillyV3/cp3/internal/codex"
 	"github.com/WillyV3/cp3/internal/mcp"
 	"github.com/WillyV3/cp3/internal/opencode"
@@ -215,26 +213,22 @@ func cmdSubscribe(args []string) {
 	if *session == "" {
 		*session = fmt.Sprintf("sub-%d", os.Getpid())
 	}
+	out := claudecode.NewStream(os.Stdout)
 	var inject func(actual string, m peers.Message) error
-	enc := json.NewEncoder(os.Stdout)
 	switch *deliver {
 	case "stdout":
-		inject = func(_ string, m peers.Message) error { return enc.Encode(m) }
+		inject = func(_ string, m peers.Message) error { return out.Message(m) }
 	case "claude-socket":
-		sock := os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET")
-		if sock == "" {
+		inbox, ok := claudecode.InboxFromEnv()
+		if !ok {
 			fmt.Fprintln(os.Stderr, "subscribe: --deliver claude-socket needs CLAUDE_CODE_MESSAGING_SOCKET (run as a child of a Claude Code session)")
 			os.Exit(2)
 		}
-		token := os.Getenv("CLAUDE_CODE_MESSAGING_TOKEN")
-		inject = func(actual string, m peers.Message) error {
-			// Native delivery gets the native reply: the cp3 mod routes SendMessage
-			// to a peer name over cp3, so the hint names that tool, not a shell command.
-			hint := fmt.Sprintf("[peer message from %s over cp3 — reply with the SendMessage tool: to=%q]", m.From, m.From)
-			if err := postClaudeSocket(sock, token, hint+"\n"+m.Content); err != nil {
+		inject = func(_ string, m peers.Message) error {
+			if err := inbox.Post(claudecode.ReplyHint(m.From) + "\n" + m.Content); err != nil {
 				return err
 			}
-			return enc.Encode(m) // the supervising mod still sees every message
+			return out.Message(m) // the supervising mod still sees every message
 		}
 	default:
 		fmt.Fprintln(os.Stderr, "subscribe: --deliver must be stdout or claude-socket")
@@ -245,12 +239,7 @@ func cmdSubscribe(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	p := peers.Peer{Agent: *agent, Machine: *machine, Cwd: *cwd, Session: *session}
-	// First stdout line: who this subscriber actually is (collision fallback
-	// included), so a supervisor never guesses the name. Messages follow, one
-	// per line; they carry "from"/"content" and no "type".
-	hello := func(actual peers.Peer) {
-		enc.Encode(map[string]any{"type": "hello", "agent": actual.Agent, "machine": actual.Machine, "cwd": actual.Cwd, "pid": os.Getpid()})
-	}
+	hello := func(actual peers.Peer) { out.Hello(actual, os.Getpid()) }
 	err := bridge.RunWithClaim(ctx, c, p, hello, inject)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "subscribe:", err)
@@ -258,52 +247,24 @@ func cmdSubscribe(args []string) {
 	}
 }
 
-// postClaudeSocket delivers one message into a Claude Code session through its
-// cross-session inbox (a Unix socket, path in CLAUDE_CODE_MESSAGING_SOCKET).
-// This is the wire format Claude Code itself documents for a child process
-// posting back to its own session: an optional auth line, then one user
-// message, each as a JSON line. The auth line always goes: on macOS Claude
-// Code can only verify an exited child by its token. Verified 2026-10-10 on
-// Claude Code 2.1.289: the message lands mid-turn as a native peer message,
-// no --dangerously-load-development-channels needed.
-func postClaudeSocket(sock, token, text string) error {
-	conn, err := net.DialTimeout("unix", sock, 3*time.Second)
-	if err != nil {
-		return fmt.Errorf("claude inbox %s: %w", sock, err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	enc := json.NewEncoder(conn)
-	if token != "" {
-		if err := enc.Encode(map[string]string{"type": "auth", "token": token}); err != nil {
-			return err
-		}
-	}
-	return enc.Encode(map[string]any{
-		"type":    "user",
-		"message": map[string]any{"role": "user", "content": text},
-	})
-}
-
 // cmdWhoami prints the identity a cp3 command run from this spot would send
 // as: the MCP-claimed name of the enclosing Claude session when there is one,
 // else the directory identity. --json for programs (the Claude Code mod).
 func cmdWhoami(args []string) {
 	fs := flag.NewFlagSet("whoami", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "machine-readable")
+	asJSON := fs.Bool("json", false, "machine-readable: name, source, machine, cwd, mcp{claimed,wanted,noChannel}, channelFlag")
 	fs.Parse(args)
-	name := callerIdentity()
-	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
+	s := claudecode.Describe(os.Getppid(), cwd)
 	if *asJSON {
-		json.NewEncoder(os.Stdout).Encode(map[string]string{"name": name, "machine": host, "cwd": cwd})
+		json.NewEncoder(os.Stdout).Encode(s)
 		return
 	}
-	if name == "" {
+	if s.Name == "" {
 		fmt.Fprintln(os.Stderr, "no identity here: set CLAUDE_PEERS_AGENT or add a .cp3-peer-name file")
 		os.Exit(1)
 	}
-	fmt.Println(name)
+	fmt.Println(s.Name)
 }
 
 func cmdSend(args []string) {
@@ -346,33 +307,11 @@ func cmdSend(args []string) {
 // looking for a session state file; fall back to directory identity for
 // genuine non-session use like crons.
 func callerIdentity() string {
-	pid := os.Getppid()
-	for range 4 {
-		if pid <= 1 {
-			break
-		}
-		if st := mcp.ReadState(pid); st.Claimed != "" {
-			return st.Claimed
-		}
-		pid = parentOf(pid)
-	}
 	cwd, _ := os.Getwd()
-	name, _ := peers.ResolveIdentity(cwd, "")
-	return name
+	return claudecode.Describe(os.Getppid(), cwd).Name
 }
 
 // parentOf returns a process's parent pid, or 0.
-func parentOf(pid int) int {
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return 0
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0
-	}
-	return n
-}
 
 // waitFor blocks until agent appears in presence. Spawning a peer is
 // asynchronous — tmux returns long before the session's MCP server finishes

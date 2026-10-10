@@ -20,12 +20,13 @@
 // machine-suffixed twin name. Without MCP, this mod owns both.
 
 const PANE = 'cp3'
-const REFRESH_MS = 5000
+const REFRESH_MS = 15000 // plus a refresh on every inbound message; 15 sessions × 5s was 3 broker connections a second
 const INBOX_KEEP = 20
 
 let me = { name: '', machine: '', cwd: '' }
 let roster = []        // rows of `cp3 peers --json`
-let mcpOwned = false   // mcp__claude-peers__* tools present → the MCP server holds the name
+let mcpOwned = false   // the cp3 MCP server is part of this session → it holds the name and the inbox
+let noChannel = false  // MCP server present but Claude launched without the dev-channel flag: its mail is never displayed
 let subscriber = null  // the HookStream of the spawned `cp3 subscribe`
 let inbox = []         // newest first: { from, content, at }
 let lastError = ''
@@ -34,9 +35,18 @@ let draft = { to: '' }
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await identify($)
-    const tools = await $.tool.list()
-    mcpOwned = tools.some((t) => t.name.startsWith('mcp__claude-peers__'))
-    if (!mcpOwned && me.name) startSubscriber($)
+    // The MCP server connects AFTER session.start, so the tool list alone misses
+    // it (seen 2026-10-10: a twin "name-omarchy" was claimed). cp3 whoami sees
+    // the server's state file and the launch flag up the process tree; if
+    // neither is there yet, wait once more before owning the inbox.
+    if (!mcpOwned && me.name) {
+      if (await mcpPresent($)) mcpOwned = true
+      else $.clock.after(4000, async () => {
+        if (await mcpPresent($)) mcpOwned = true
+        else startSubscriber($)
+        $.ui.invalidate('ui.render')
+      })
+    }
     await refresh($)
     $.clock.every(REFRESH_MS, () => refresh($))
     // Commands last: a taken name throws and would skip the rest of this hook.
@@ -51,8 +61,11 @@ export function register(on) {
     return next(e)
   })
 
+  // /clear, /resume and /branch also fire session.end — and session.start does
+  // NOT fire again after them. The process and its inbox socket are unchanged,
+  // so the subscriber stays; only a real exit stops it.
   on('session.end', async ($, e, next) => {
-    stopSubscriber()
+    if (e.reason !== 'clear' && e.reason !== 'resume') stopSubscriber()
     return next(e)
   })
 
@@ -101,6 +114,7 @@ export function register(on) {
       Text({ dimColor: true, children: [self ? ' · ' + roster.filter((p) => p.up).length + ' peers' : ' · not registered'] }),
     ]
     if (self && self.pending > 0) parts.push(Text({ color: 'yellow', children: [' · ✉' + self.pending] }))
+    if (noChannel) parts.push(Text({ color: 'red', children: [' · ✖ NO CHANNEL (relaunch: cp3 run)'] }))
     if (inbox.length > 0) parts.push(Text({ dimColor: true, children: [' · last: ' + inbox[0].from] }))
     if (lastError) parts.push(Text({ color: 'red', children: [' · ' + lastError] }))
     const band = Box({ flexDirection: 'row', paddingX: 1, children: parts })
@@ -176,10 +190,23 @@ async function identify($) {
     if (r.exitCode === 0) {
       const w = JSON.parse(r.stdout)
       me = { name: w.name ?? '', machine: w.machine ?? '', cwd: w.cwd ?? '' }
+      if (w.mcp || w.channelFlag) mcpOwned = true
+      noChannel = Boolean(w.mcp && w.mcp.noChannel)
     }
   } catch (err) {
     lastError = 'whoami failed'
   }
+}
+
+// Is the cp3 MCP server part of this session? Either its tools have appeared,
+// or cp3 whoami sees its state / the launch flag up the process tree.
+async function mcpPresent($) {
+  try {
+    const tools = await $.tool.list()
+    if (tools.some((t) => t.name.startsWith('mcp__claude-peers__'))) return true
+  } catch {}
+  await identify($)
+  return mcpOwned
 }
 
 async function refresh($) {
@@ -255,7 +282,6 @@ async function onLine($, sid, line) {
   }
   if (ev.type === 'hello') {
     me = { name: ev.agent, machine: ev.machine, cwd: ev.cwd }
-    await $.store.set('subscriber:' + sid, ev.pid)
     $.ui.invalidate('ui.render')
     return
   }
@@ -267,16 +293,12 @@ async function onLine($, sid, line) {
 
 // A hot reload drops this module's variables but not the child it spawned; a
 // surviving child would hold the name and deliver to a session that no longer
-// draws it. The pid from the hello line is kept per session so the next
-// instance can end it first.
+// draws it. The child is found by the session id in its argv — a pid could
+// have been reused by an unrelated process after a crash, the id cannot.
 async function killStale($) {
   try {
     const sid = await $.session.id()
-    const pid = await $.store.get('subscriber:' + sid)
-    if (typeof pid === 'number') {
-      await $.process.run(['kill', String(pid)], { timeoutMs: 3000 })
-      await $.store.delete('subscriber:' + sid)
-    }
+    await $.process.run(['pkill', '-f', '--', 'cp3 subscribe .*--session mod-' + sid], { timeoutMs: 3000 })
   } catch {}
 }
 
