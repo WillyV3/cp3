@@ -147,7 +147,7 @@ func readStdin() []byte {
 }
 
 // cmdStatusLine prints the line and ALWAYS exits 0 — a statusline must never
-// error out its host. The whole NATS fetch runs behind a 700ms wall.
+// error out its host. The whole NATS fetch runs behind one wall (see cmdStatusLine).
 // The session id comes from --session, or from the "session_id" field of the
 // statusline JSON Claude pipes on stdin.
 func cmdStatusLine(args []string) {
@@ -187,6 +187,13 @@ func cmdStatusLine(args []string) {
 		configured, _ = peers.ResolveIdentity(cwd, *name)
 	}
 
+	// One wall for everything. 700ms was sized for a LAN broker; macbook1
+	// reaches homelab at ~100-170ms RTT over tailscale and read "peers down"
+	// on a healthy network (2026-10-10). The roster and the inbox count are
+	// independent, so they go in parallel: ~4 round trips total.
+	const wall = 1200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), wall)
+	defer cancel()
 	done := make(chan string, 1)
 	go func() {
 		c, err := peers.ConnectFromEnv()
@@ -195,8 +202,15 @@ func cmdStatusLine(args []string) {
 			return
 		}
 		defer c.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
-		defer cancel()
+		type consumers struct {
+			list []peers.ConsumerStatus
+			err  error
+		}
+		cch := make(chan consumers, 1)
+		go func() {
+			cs, cerr := c.Consumers(ctx)
+			cch <- consumers{cs, cerr}
+		}()
 		list, err := c.Peers(ctx)
 		// Pending tracks the name we actually display (claimed beats
 		// configured), so the badge follows the real inbox.
@@ -212,12 +226,10 @@ func cmdStatusLine(args []string) {
 			}
 		}
 		var pending uint64
-		if err == nil && shown != "" {
-			if cs, cerr := c.Consumers(ctx); cerr == nil {
-				for _, s := range cs {
-					if s.Name == "inbox-"+shown {
-						pending = s.Pending
-					}
+		if cs := <-cch; err == nil && cs.err == nil && shown != "" {
+			for _, s := range cs.list {
+				if s.Name == "inbox-"+shown {
+					pending = s.Pending
 				}
 			}
 		}
@@ -226,7 +238,7 @@ func cmdStatusLine(args []string) {
 	select {
 	case line := <-done:
 		fmt.Println(line)
-	case <-time.After(700 * time.Millisecond):
+	case <-ctx.Done():
 		fmt.Println(statusLine(configured, claimed, sid, cwd, machine, nil, 0, st.NoChannel, context.DeadlineExceeded))
 	}
 }

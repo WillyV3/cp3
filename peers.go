@@ -444,26 +444,31 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys, err := kv.Keys(ctx)
+	// One watch delivers every live entry in a single round trip, then a nil
+	// marker. The previous Keys()+Get-per-key loop cost N+1 round trips, and
+	// at ~100ms RTT (macbook1 -> homelab over tailscale) 15 peers put every
+	// roster read near 2s — past the statusline's 700ms wall, which then
+	// read "peers down" on a healthy network. Measured 2026-10-10.
+	w, err := kv.WatchAll(ctx, jetstream.IgnoreDeletes())
 	if err != nil {
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("kv keys: %w", err)
+		return nil, fmt.Errorf("kv watch: %w", err)
 	}
-	out := make([]Peer, 0, len(keys))
-	for _, k := range keys {
-		entry, err := kv.Get(ctx, k)
-		if err != nil {
-			continue // key expired between list and get — skip
+	defer w.Stop()
+	var out []Peer
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case entry := <-w.Updates():
+			if entry == nil {
+				return out, nil // initial values delivered
+			}
+			var p Peer
+			if json.Unmarshal(entry.Value(), &p) == nil {
+				out = append(out, p)
+			}
 		}
-		var p Peer
-		if err := json.Unmarshal(entry.Value(), &p); err != nil {
-			continue
-		}
-		out = append(out, p)
 	}
-	return out, nil
 }
 
 // ConsumerStatus is a liveness snapshot of one consumer on the log. Pending
