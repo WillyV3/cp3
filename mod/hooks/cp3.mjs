@@ -107,15 +107,14 @@ export function register(on) {
     if (e.props.hasSurvey || !me.name) return theirs
     const { Box, Text } = $.ui.resolve(e)
     const self = roster.find((p) => p.name === me.name)
-    const mine = self ? '● ' : '○ '
+    const up = roster.filter((p) => p.up).length
     const parts = [
-      Text({ color: self ? 'green' : 'yellow', children: [mine] }),
+      Text({ color: self ? 'green' : 'yellow', children: [self ? '● ' : '○ '] }),
       Text({ bold: true, children: [me.name] }),
-      Text({ dimColor: true, children: [self ? ' · ' + roster.filter((p) => p.up).length + ' peers' : ' · not registered'] }),
+      Text({ dimColor: true, children: [self ? ' · ' + up + ' up' : ' · not registered'] }),
     ]
     if (self && self.pending > 0) parts.push(Text({ color: 'yellow', children: [' · ✉' + self.pending] }))
     if (noChannel) parts.push(Text({ color: 'red', children: [' · ✖ NO CHANNEL (relaunch: cp3 run)'] }))
-    if (inbox.length > 0) parts.push(Text({ dimColor: true, children: [' · last: ' + inbox[0].from] }))
     if (lastError) parts.push(Text({ color: 'red', children: [' · ' + lastError] }))
     const band = Box({ flexDirection: 'row', paddingX: 1, children: parts })
     return theirs && theirs.type !== 'engine' ? Box({ flexDirection: 'column', children: [theirs, band] }) : band
@@ -124,40 +123,65 @@ export function register(on) {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
     const { Box, Text, Input, Button } = $.ui.resolve(e)
-    const width = e.props.bodyColumns ?? 80
-    const rows = roster.map((p) =>
-      Box({
+    const up = roster.filter((p) => p.up)
+    const down = roster.filter((p) => !p.up)
+    // You first, then the live peers by name, then the ones that are down.
+    const order = [
+      ...up.filter((p) => p.name === me.name),
+      ...up.filter((p) => p.name !== me.name).sort(byName),
+      ...down.sort(byName),
+    ]
+    const row = (p) => {
+      const isMe = p.name === me.name
+      const where = p.machine && p.machine !== me.machine ? p.machine : ''
+      const detail = [where, p.summary || shortPath(p.cwd)].filter(Boolean).join(' · ')
+      return Box({
         flexDirection: 'row',
         columnGap: 1,
         children: [
-          Text({ color: p.up ? 'green' : 'red', children: [p.up ? '●' : '○'] }),
+          Text({ color: p.up ? 'green' : 'red', dimColor: !p.up, children: [p.up ? '●' : '○'] }),
           Button({
             key: 'to-' + p.name,
             label: p.name,
             plain: true,
+            dimColor: !p.up,
             onPress: () => {
               draft.to = p.name
               $.ui.invalidate('ui.render')
             },
           }),
-          Text({ dimColor: true, wrap: 'truncate', children: [[p.machine, shortPath(p.cwd), p.summary].filter(Boolean).join(' · ')] }),
+          ...(isMe ? [Text({ color: 'cyan', children: ['you'] })] : []),
           ...(p.pending ? [Text({ color: 'yellow', children: ['✉' + p.pending] })] : []),
+          Text({ dimColor: true, wrap: 'truncate-start', children: [detail] }),
+        ],
+      })
+    }
+    const head = [
+      Text({ bold: true, children: ['cp3'] }),
+      Text({ dimColor: true, children: [' · ' + up.length + ' up' + (down.length ? ' · ' + down.length + ' down' : '')] }),
+    ]
+    if (noChannel) head.push(Text({ color: 'red', children: [' · ✖ NO CHANNEL'] }))
+    const recent = inbox.slice(0, 5).map((m) =>
+      Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [
+          Text({ color: 'cyan', children: [m.from] }),
+          Text({ dimColor: true, wrap: 'truncate', children: [m.content.split('\n').filter((l) => !l.startsWith('['))[0] ?? ''] }),
         ],
       }),
-    )
-    const recent = inbox.slice(0, 5).map((m) =>
-      Text({ wrap: 'truncate', children: [m.from + ': ' + m.content.split('\n')[0]] }),
     )
     return Box({
       flexDirection: 'column',
       children: [
-        Text({ dimColor: true, children: [(mcpOwned ? 'identity: cp3 mcp' : 'identity: this mod') + ' · ' + roster.filter((p) => p.up).length + ' up · ' + (me.machine || '')] }),
-        ...rows,
+        Box({ flexDirection: 'row', children: head }),
+        Text({ children: [' '] }),
+        ...order.map(row),
         Text({ children: [' '] }),
         Input({
           key: 'send',
-          label: draft.to ? 'to ' + draft.to : 'to <peer> message',
-          placeholder: draft.to ? 'message, Enter sends' : 'peer message  (or press a name above)',
+          label: draft.to ? 'to ' + draft.to : 'send',
+          placeholder: draft.to ? 'message' : 'name message',
           value: '',
           submitLabel: 'send',
           onSubmit: async (value) => {
@@ -177,11 +201,14 @@ export function register(on) {
             $.ui.invalidate('ui.render')
           },
         }),
-        ...(recent.length ? [Text({ children: [' '] }), Text({ dimColor: true, children: ['recent inbound'] }), ...recent] : []),
-        ...(width < 60 ? [Text({ dimColor: true, children: ['(narrow)'] })] : []),
+        ...(recent.length ? [Text({ children: [' '] }), Text({ dimColor: true, children: ['inbox'] }), ...recent] : []),
       ],
     })
   })
+}
+
+function byName(a, b) {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
 }
 
 async function identify($) {
