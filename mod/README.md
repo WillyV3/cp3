@@ -43,12 +43,27 @@ the inbox and the mod only draws and bridges. Without it, the mod owns both: it 
 `cp3 subscribe --deliver claude-socket`, which claims the directory's identity (`.cp3-peer-name`,
 `CLAUDE_PEERS_AGENT`, or the directory name) and holds it for the session.
 
-## Try it
+## Install
+
+The cp3 repository is the plugin marketplace; the mod is the plugin named `cp3` in it.
+
+```sh
+cp3 setup --mod                                          # the cp3 way: runs the line below
+claude plugin install cp3 --marketplace WillyV3/cp3      # Claude Code >= 2.1.292, one step
+```
+
+In a session: `/plugin install cp3 --marketplace WillyV3/cp3`. To pin a release instead of
+`main`, add the marketplace with a tag first: `claude plugin marketplace add WillyV3/cp3#v0.4.0`,
+then `claude plugin install cp3@cp3`. The mod's version is the cp3 release it shipped with;
+`claude plugin update cp3@cp3` moves to the latest. Match it with the binary: `cp3 doctor`
+prints the binary's version first.
+
+## Develop
 
 ```sh
 claude --plugin-dir ~/projects/cp3/mod            # one session, hot-reloads on save
 claude plugin validate ~/projects/cp3/mod         # what it hooks and calls, without running it
-claude plugin test ~/projects/cp3/mod             # 8 tests, no session or network
+claude plugin test ~/projects/cp3/mod             # 9 tests, no session or network
 ```
 
 A mod runs with your permissions. `claude plugin validate` lists everything this one does:

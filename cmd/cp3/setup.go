@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,7 @@ func cmdSetup(args []string) {
 	nats := fs.String("nats", "nats://127.0.0.1:4222", "NATS URL")
 	settings := fs.String("settings", defaultSettingsPath(), "Claude settings.json for the statusline (set only when none exists)")
 	agentsMD := fs.String("agents-md", "", "also write the agent usage block into this AGENTS.md (idempotent, marker-delimited)")
+	mod := fs.Bool("mod", false, "also install the cp3 mod into Claude Code (claude plugin install cp3 --marketplace "+modMarketplace+"; Claude Code >= 2.1.292)")
 	fs.Parse(args)
 	// The MCP entry points at THIS binary (`cp3 mcp`) by absolute path —
 	// os.Executable, not a PATH lookup, because Claude may launch from a shell
@@ -191,10 +193,35 @@ func cmdSetup(args []string) {
 			fmt.Printf("agent usage block already current in %s\n", *agentsMD)
 		}
 	}
+	if *mod {
+		if err := installMod(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "setup: mod:", err)
+			os.Exit(1)
+		}
+	}
 	fmt.Println()
 	fmt.Println("Token: put the fleet token in ~/.config/cp3/token (0600) — never in config/argv.")
 	fmt.Println("Launch: cp3 run --as <name>   (execs claude with the peers dev-channel loaded;")
 	fmt.Println("        or rely on a .cp3-peer-name file in the project dir)")
+	if !*mod {
+		fmt.Println("Mod:    cp3 setup --mod   (peers above the prompt and a /cp3 pane inside Claude Code)")
+	}
+}
+
+// modMarketplace is the Claude Code plugin marketplace the mod ships from:
+// this repository, whose .claude-plugin/marketplace.json lists ./mod.
+const modMarketplace = "WillyV3/cp3"
+
+// installMod hands the install to Claude Code's own plugin command, which
+// clones the marketplace, pins the mod at its plugin.json version, and
+// records it in the user's settings. cp3 never writes those files itself.
+func installMod(w io.Writer) error {
+	cmd := exec.Command("claude", "plugin", "install", "cp3", "--marketplace", modMarketplace)
+	cmd.Stdout, cmd.Stderr = w, w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("claude plugin install: %w (needs Claude Code >= 2.1.292; by hand: claude plugin install cp3 --marketplace %s)", err, modMarketplace)
+	}
+	return nil
 }
 
 // cmdRun execs the real `claude` with the dev-channel flag injected. --as/--name

@@ -5,6 +5,8 @@ project_name: cp3
 before:
   hooks:
     - go mod tidy
+    # the mod ships from this repo as a plugin marketplace; its version must equal the tag
+    - sh scripts/check-mod-version.sh {{ .Version }} {{ .IsSnapshot }}
 
 builds:
   - id: cp3
@@ -53,7 +55,8 @@ brews:
     install: |
       bin.install "cp3"
     caveats: |
-      Get started:  cp3 setup   (wires Claude Code MCP + statusline)
+      Get started:  cp3 setup         (wires Claude Code MCP + statusline)
+                    cp3 setup --mod   (also installs the cp3 mod into Claude Code)
       Tip: `cp3 statusline` prints a live peers segment — append it to a
       custom statusline if you have one. `cp3 doctor` diagnoses anything.
     test: |

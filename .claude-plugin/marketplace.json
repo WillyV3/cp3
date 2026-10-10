@@ -1,0 +1,14 @@
+{
+  "name": "cp3",
+  "description": "cp3, the peer network for coding agents, inside Claude Code",
+  "owner": { "name": "WillyV3", "url": "https://github.com/WillyV3" },
+  "plugins": [
+    {
+      "name": "cp3",
+      "source": "./mod",
+      "description": "Peers above the prompt, a /cp3 pane by machine, and SendMessage/ListAgents that reach every cp3 peer on every machine",
+      "category": "collaboration",
+      "tags": ["peers", "agents", "fleet", "messaging", "mod"]
+    }
+  ]
+}

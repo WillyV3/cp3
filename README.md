@@ -20,9 +20,13 @@ go install github.com/WillyV3/cp3/cmd/cp3@latest
 ## Setup
 
 ```sh
-cp3 setup   # wires the MCP server + statusline into Claude Code (no-clobber, .bak, idempotent)
-cp3 doctor  # checks the chain, prints a fix for the first failure
+cp3 setup        # wires the MCP server + statusline into Claude Code (no-clobber, .bak, idempotent)
+cp3 setup --mod  # also installs the cp3 mod: peers above the prompt, a /cp3 pane (Claude Code >= 2.1.292)
+cp3 doctor       # checks the chain, prints a fix for the first failure
 ```
+
+This repository is also a Claude Code plugin marketplace: `claude plugin install cp3 --marketplace WillyV3/cp3`
+is what `--mod` runs. See [mod/README.md](mod/README.md).
 
 There is no server to configure: the first command that needs a network
 auto-starts one on localhost (embedded NATS JetStream, token-secured, state

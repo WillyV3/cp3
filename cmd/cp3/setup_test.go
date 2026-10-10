@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,4 +195,37 @@ func TestSetupDoesNotPinDefaultNATSURL(t *testing.T) {
 			t.Errorf("explicit --nats not written: got %v", got)
 		}
 	})
+}
+
+// installMod delegates to `claude plugin install` with the marketplace this
+// repo is; a stub claude on PATH records what it was asked.
+func TestInstallModRunsClaudePluginInstall(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "args")
+	stub := "#!/bin/sh\necho \"$@\" > " + out + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := installMod(io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(out)
+	if want := "plugin install cp3 --marketplace WillyV3/cp3\n"; string(got) != want {
+		t.Fatalf("claude was run with %q, want %q", got, want)
+	}
+}
+
+func TestInstallModFailureNamesTheByHandCommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	err := installMod(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "claude plugin install cp3 --marketplace WillyV3/cp3") {
+		t.Fatalf("want the by-hand command in the error, got %v", err)
+	}
 }
