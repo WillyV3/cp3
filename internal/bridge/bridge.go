@@ -42,6 +42,14 @@ func ReplyHint(me, sender string) string {
 // durable inbox split the messages between them, so the loser must stop
 // consuming — fail loud, let the supervisor restart us into a fresh claim.
 func Run(ctx context.Context, c *peers.Client, p peers.Peer, inject func(actual string, m peers.Message) error) error {
+	return RunWithClaim(ctx, c, p, nil, inject)
+}
+
+// RunWithClaim is Run with a callback for the moment the name is held: onClaim
+// receives the peer as actually registered (fallback suffix included), before
+// the first message can arrive. A supervisor that reads this process's output
+// learns its real name from this instead of guessing.
+func RunWithClaim(ctx context.Context, c *peers.Client, p peers.Peer, onClaim func(actual peers.Peer), inject func(actual string, m peers.Message) error) error {
 	if err := c.Setup(ctx); err != nil {
 		return err
 	}
@@ -51,6 +59,9 @@ func Run(ctx context.Context, c *peers.Client, p peers.Peer, inject func(actual 
 	}
 	if actual.Agent != p.Agent {
 		log.Printf("[bridge] name %q taken; running as %q", p.Agent, actual.Agent)
+	}
+	if onClaim != nil {
+		onClaim(actual)
 	}
 	subCtx, cancel := context.WithCancelCause(ctx)
 	// Run must not return before the name is released: callers exit the

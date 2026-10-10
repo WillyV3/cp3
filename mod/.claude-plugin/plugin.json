@@ -1,0 +1,6 @@
+{
+  "name": "cp3",
+  "version": "0.1.0",
+  "description": "cp3 peer network inside Claude Code: live roster above the prompt, /cp3 pane, and the native SendMessage/ListAgents tools reach every peer on the fleet",
+  "author": { "name": "WillyV3" }
+}

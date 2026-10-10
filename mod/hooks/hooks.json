@@ -1,0 +1,4 @@
+{
+  "description": "cp3 hooks module",
+  "modules": ["./cp3.mjs"]
+}
