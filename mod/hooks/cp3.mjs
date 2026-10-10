@@ -40,6 +40,9 @@ const G = {
   mac: '\ue711',       // dev-apple
   pi: '\u{f043f}',     // md-raspberry_pi
   cut: '\u{f0319}',    // md-lan_disconnect   no channel / no network
+  got: '\u{f1161}',    // md-send_check       the peer's session took it
+  held: '\u{f1163}',   // md-send_clock       queued, lands when the peer is back
+  lost: '\u{f0156}',   // md-close            no inbox by that name
 }
 
 let me = { name: '', machine: '', cwd: '' }
@@ -99,7 +102,7 @@ export function register(on) {
     }
     const [to, ...rest] = args.split(/\s+/)
     if (rest.length === 0) return { text: 'usage: /cp3 <peer> <message>' }
-    return { text: await send($, to, rest.join(' ')) }
+    return { text: receipt(to, await send($, to, rest.join(' '))) }
   })
 
   // Claude's own SendMessage reaches a cp3 peer by name. A cp3 name wins over a
@@ -243,7 +246,7 @@ export function register(on) {
                   body = text.slice(sp + 1)
                 }
                 const status = await send($, to, body)
-                $.ui.toast(G.send + ' ' + status)
+                $.ui.toast(receipt(to, status))
                 draft.to = ''
                 $.ui.invalidate('ui.render')
               },
@@ -259,6 +262,16 @@ export function register(on) {
       ],
     })
   })
+}
+
+// cp3 send says one of three things; the person needs one glyph and the name.
+// "delivered" means a live session consumed it — that is the received mark.
+// Anything else is shown whole: it is an error, and errors are not shortened.
+function receipt(to, status) {
+  if (/^delivered/.test(status)) return G.got + ' ' + to
+  if (/^queued/.test(status)) return G.held + ' ' + to + ' · queued, lands when it is back'
+  if (/^NOT DELIVERED/.test(status)) return G.lost + ' ' + to + ' · no inbox by that name'
+  return status
 }
 
 function pick($, name) {

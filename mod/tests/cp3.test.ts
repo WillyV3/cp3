@@ -10,10 +10,11 @@ const ROSTER = JSON.stringify([
 // Stubs every cp3 call the mod makes and records the argv of each one, so a
 // test can assert what was run. tool.list reports the MCP server present, so
 // the mod does not spawn a subscriber (a stream a test cannot stub).
-function stubCp3(on, { runs }: { runs: string[][] }) {
+function stubCp3(on, { runs, send }: { runs: string[][]; send?: { exitCode: number; stdout: string; stderr: string } }) {
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const [, cmd] = e.argv
+    if (cmd === 'send' && send) return { value: send }
     if (cmd === 'whoami') return { value: { exitCode: 0, stdout: '{"name":"mod-test","machine":"omarchy","cwd":"/w"}\n', stderr: '' } }
     if (cmd === 'peers') return { value: { exitCode: 0, stdout: ROSTER, stderr: '' } }
     if (cmd === 'send') return { value: { exitCode: 0, stdout: 'delivered to ' + e.argv[e.argv.indexOf('--to') + 1] + ' (live session consuming now)\n', stderr: '' } }
@@ -91,8 +92,18 @@ test('/cp3 <peer> <message> sends and prints the delivery status', async ($, on)
 
   const answer = await $.command.run({ command: 'cp3', args: 'keeper ping from the pane' })
 
-  expect(answer.text).toMatch(/^delivered to keeper/)
+  expect(answer.text).toBe('\u{f1161} keeper') // the receipt, not cp3's sentence
   expect(runs.find((a) => a[1] === 'send')).toEqual(['cp3', 'send', '--from', 'mod-test', '--to', 'keeper', 'ping from the pane'])
+})
+
+test('/cp3 to a peer whose inbox is gone says so in full', async ($, on) => {
+  const runs: string[][] = []
+  stubCp3(on, { runs, send: { exitCode: 1, stdout: '', stderr: 'NOT DELIVERED to ghost: no inbox by that name\n' } })
+  await start($)
+
+  const answer = await $.command.run({ command: 'cp3', args: 'ghost hello' })
+
+  expect(answer.text).toBe('\u{f0156} ghost · no inbox by that name')
 })
 
 test('/cp3 with a peer but no message explains the usage instead of sending', async ($, on) => {
