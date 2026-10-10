@@ -1,27 +1,46 @@
 // cp3 mod — the cp3 peer network inside Claude Code.
 //
-// What it adds:
-//   • a band above the prompt: ● <me> · N peers · ✉k, live
-//   • /cp3 — a pane with the fleet roster and a field to message any peer
-//   • SendMessage / ListAgents, Claude's own cross-session tools, reach every
-//     cp3 peer on the fleet by name (the native feature only spans one machine
-//     without Anthropic's servers; cp3 is the self-hosted transport for the rest)
+//   • a line above the prompt: who you are here, how many peers are up, mail waiting
+//   • /cp3 — the roster by machine, a field to message any peer, the last mail in
+//   • SendMessage / ListAgents, Claude's own cross-session tools, reach every cp3
+//     peer by name — same machine or another one (the native feature spans one
+//     machine unless both sides go through Anthropic's servers)
 //   • inbound mail lands as a native cross-session message, mid-turn, with no
 //     --dangerously-load-development-channels flag: the subscriber posts it to
 //     this session's inbox socket
 //
-// The cp3 binary is the one wall: this file never speaks NATS or parses cp3's
-// internals. It runs `cp3 whoami`, `cp3 peers --json`, `cp3 send`, and
-// supervises `cp3 subscribe --deliver claude-socket`.
+// The cp3 binary is the one wall: this file never speaks NATS. It runs
+// `cp3 whoami`, `cp3 peers --json`, `cp3 send`, and supervises
+// `cp3 subscribe --deliver claude-socket`.
 //
 // Identity: when the session already runs the cp3 MCP server (`cp3 run`), that
 // server owns the name and the inbox and this mod only draws and bridges —
 // otherwise two subscribers would split one inbox and the second would get a
 // machine-suffixed twin name. Without MCP, this mod owns both.
+//
+// Colors are theme keys only (success, warning, error, claude, inactive), so
+// the mod follows the person's Claude Code theme. Glyphs are Nerd Font
+// codepoints, each named by its nerdfonts.com name (glyphnames.json 3.5.1); a
+// terminal without a Nerd Font shows boxes, the same trade every Nerd Font
+// statusline makes.
 
 const PANE = 'cp3'
 const REFRESH_MS = 15000 // plus a refresh on every inbound message; 15 sessions × 5s was 3 broker connections a second
 const INBOX_KEEP = 20
+
+const G = {
+  net: '\uf43c',       // oct-broadcast       the network
+  up: '\u{f0765}',     // md-circle           a live peer
+  away: '\u{f0766}',   // md-circle_outline   a peer that is down
+  mail: '\u{f01ee}',   // md-email            mail waiting in an inbox
+  send: '\u{f048a}',   // md-send
+  inbox: '\u{f02fb}',  // md-inbox_arrow_down
+  here: '\uf489',      // oct-terminal        this machine
+  box: '\u{f048b}',    // md-server           another machine
+  mac: '\ue711',       // dev-apple
+  pi: '\u{f043f}',     // md-raspberry_pi
+  cut: '\u{f0319}',    // md-lan_disconnect   no channel / no network
+}
 
 let me = { name: '', machine: '', cwd: '' }
 let roster = []        // rows of `cp3 peers --json`
@@ -53,7 +72,7 @@ export function register(on) {
     try {
       await $.command.register({
         name: 'cp3',
-        description: 'cp3 peers: the fleet roster, your inbox, and a field to message any peer',
+        description: 'cp3 peers by machine, mail waiting, and a field to message any of them',
         argumentHint: '[peer message…]',
         immediate: true,
       })
@@ -74,7 +93,8 @@ export function register(on) {
   on('command.run', { command: 'cp3' }, async ($, e) => {
     const args = (e.args ?? '').trim()
     if (!args) {
-      await $.ui.open({ id: PANE, title: 'cp3 peers', focus: true, closeOnEscape: true, rows: Math.min(roster.length + 6, 24) })
+      const machines = new Set(roster.map((p) => p.machine || '')).size
+      await $.ui.open({ id: PANE, title: 'cp3', focus: true, closeOnEscape: true, rows: Math.min(roster.length + machines * 2 + 8, 30) })
       return {}
     }
     const [to, ...rest] = args.split(/\s+/)
@@ -102,109 +122,176 @@ export function register(on) {
     return { ...r, result: { ...r.result, listing } }
   }).catch(async ($, e, next) => next(e))
 
+  // One line: am I on the network, under what name, how many are up, is there
+  // mail. Nothing else unless something is wrong.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const theirs = await next(e)
     if (e.props.hasSurvey || !me.name) return theirs
     const { Box, Text } = $.ui.resolve(e)
     const self = roster.find((p) => p.name === me.name)
     const up = roster.filter((p) => p.up).length
+    const machines = new Set(roster.filter((p) => p.up).map((p) => p.machine || '')).size
     const parts = [
-      Text({ color: self ? 'green' : 'yellow', children: [self ? '● ' : '○ '] }),
-      Text({ bold: true, children: [me.name] }),
-      Text({ dimColor: true, children: [self ? ' · ' + up + ' up' : ' · not registered'] }),
-    ]
-    if (self && self.pending > 0) parts.push(Text({ color: 'yellow', children: [' · ✉' + self.pending] }))
-    if (noChannel) parts.push(Text({ color: 'red', children: [' · ✖ NO CHANNEL (relaunch: cp3 run)'] }))
-    if (lastError) parts.push(Text({ color: 'red', children: [' · ' + lastError] }))
-    const band = Box({ flexDirection: 'row', paddingX: 1, children: parts })
-    return theirs && theirs.type !== 'engine' ? Box({ flexDirection: 'column', children: [theirs, band] }) : band
-  })
-
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE) return next(e)
-    const { Box, Text, Input, Button } = $.ui.resolve(e)
-    const up = roster.filter((p) => p.up)
-    const down = roster.filter((p) => !p.up)
-    // You first, then the live peers by name, then the ones that are down.
-    const order = [
-      ...up.filter((p) => p.name === me.name),
-      ...up.filter((p) => p.name !== me.name).sort(byName),
-      ...down.sort(byName),
-    ]
-    const row = (p) => {
-      const isMe = p.name === me.name
-      const where = p.machine && p.machine !== me.machine ? p.machine : ''
-      const detail = [where, p.summary || shortPath(p.cwd)].filter(Boolean).join(' · ')
-      return Box({
-        flexDirection: 'row',
-        columnGap: 1,
-        children: [
-          Text({ color: p.up ? 'green' : 'red', dimColor: !p.up, children: [p.up ? '●' : '○'] }),
-          Button({
-            key: 'to-' + p.name,
-            label: p.name,
-            plain: true,
-            dimColor: !p.up,
-            onPress: () => {
-              draft.to = p.name
-              $.ui.invalidate('ui.render')
-            },
-          }),
-          ...(isMe ? [Text({ color: 'cyan', children: ['you'] })] : []),
-          ...(p.pending ? [Text({ color: 'yellow', children: ['✉' + p.pending] })] : []),
-          Text({ dimColor: true, wrap: 'truncate-start', children: [detail] }),
-        ],
-      })
-    }
-    const head = [
-      Text({ bold: true, children: ['cp3'] }),
-      Text({ dimColor: true, children: [' · ' + up.length + ' up' + (down.length ? ' · ' + down.length + ' down' : '')] }),
-    ]
-    if (noChannel) head.push(Text({ color: 'red', children: [' · ✖ NO CHANNEL'] }))
-    const recent = inbox.slice(0, 5).map((m) =>
       Box({
         flexDirection: 'row',
         columnGap: 1,
         children: [
-          Text({ color: 'cyan', children: [m.from] }),
-          Text({ dimColor: true, wrap: 'truncate', children: [m.content.split('\n').filter((l) => !l.startsWith('['))[0] ?? ''] }),
+          Text({ color: self ? 'success' : 'warning', children: [self ? G.up : G.away] }),
+          Text({ color: 'claude', children: [me.name] }),
+        ],
+      }),
+    ]
+    if (self) parts.push(Text({ dimColor: true, children: [up + ' up' + (machines > 1 ? ' · ' + machines + ' machines' : '')] }))
+    else parts.push(Text({ color: 'warning', children: ['not registered'] }))
+    if (self && self.pending > 0) parts.push(Text({ color: 'warning', children: [G.mail + ' ' + self.pending] }))
+    if (noChannel) parts.push(Text({ color: 'error', children: [G.cut + ' no channel · relaunch with cp3 run'] }))
+    if (lastError) parts.push(Text({ color: 'error', children: [G.cut + ' ' + lastError] }))
+    const band = Box({ flexDirection: 'row', columnGap: 2, paddingX: 1, children: parts })
+    return theirs && theirs.type !== 'engine' ? Box({ flexDirection: 'column', children: [theirs, band] }) : band
+  })
+
+  // The pane: peers grouped by machine (this one first, no group when there is
+  // only one), you first in your group, the ones that are down last and faint.
+  // One row per peer: presence · name · mail · what it is doing.
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE) return next(e)
+    const { Box, Text, Input, Button } = $.ui.resolve(e)
+    const upCount = roster.filter((p) => p.up).length
+    const awayCount = roster.length - upCount
+    const nameWidth = Math.max(4, ...roster.map((p) => p.name.length))
+
+    const row = (p) => {
+      const isMe = p.name === me.name
+      const doing = isMe ? 'you' : p.summary || p.title || shortPath(p.cwd)
+      return Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [
+          Text({ color: p.up ? (isMe ? 'claude' : 'success') : 'inactive', children: [p.up ? G.up : G.away] }),
+          Box({
+            width: nameWidth + 1,
+            children: [Button({ key: 'to-' + p.name, label: p.name, plain: true, dimColor: !p.up, onPress: () => pick($, p.name) })],
+          }),
+          ...(p.pending ? [Text({ color: 'warning', children: [G.mail + ' ' + p.pending] })] : []),
+          Text({ dimColor: true, wrap: 'truncate-end', children: [doing] }),
+        ],
+      })
+    }
+
+    const groups = byMachine(roster, me.machine)
+    const body = []
+    for (const g of groups) {
+      if (groups.length > 1) {
+        body.push(Box({
+          flexDirection: 'row',
+          columnGap: 1,
+          marginTop: body.length ? 1 : 0,
+          children: [
+            Text({ dimColor: true, children: [machineGlyph(g.machine, me.machine)] }),
+            Text({ dimColor: true, children: [g.machine || 'unknown machine'] }),
+            ...(g.machine === me.machine ? [Text({ dimColor: true, children: ['· here'] })] : []),
+          ],
+        }))
+      }
+      body.push(...g.peers.map(row))
+    }
+
+    const recent = inbox.slice(0, 4).map((m) =>
+      Box({
+        flexDirection: 'row',
+        columnGap: 1,
+        children: [
+          Box({ width: nameWidth + 1, children: [Text({ children: [m.from] })] }),
+          Text({ dimColor: true, wrap: 'truncate-end', children: [firstLine(m.content)] }),
         ],
       }),
     )
+
     return Box({
       flexDirection: 'column',
+      paddingX: 1,
       children: [
-        Box({ flexDirection: 'row', children: head }),
-        Text({ children: [' '] }),
-        ...order.map(row),
-        Text({ children: [' '] }),
-        Input({
-          key: 'send',
-          label: draft.to ? 'to ' + draft.to : 'send',
-          placeholder: draft.to ? 'message' : 'name message',
-          value: '',
-          submitLabel: 'send',
-          onSubmit: async (value) => {
-            const text = value.trim()
-            if (!text) return
-            let to = draft.to
-            let body = text
-            if (!to) {
-              const sp = text.indexOf(' ')
-              if (sp < 0) return
-              to = text.slice(0, sp)
-              body = text.slice(sp + 1)
-            }
-            const status = await send($, to, body)
-            $.ui.toast('cp3: ' + status)
-            draft.to = ''
-            $.ui.invalidate('ui.render')
-          },
+        Box({
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          children: [
+            Box({ flexDirection: 'row', columnGap: 1, children: [Text({ color: 'claude', children: [G.net] }), Text({ bold: true, children: ['cp3'] })] }),
+            Text({ dimColor: true, children: [upCount + ' up' + (awayCount ? ' · ' + awayCount + ' away' : '')] }),
+          ],
         }),
-        ...(recent.length ? [Text({ children: [' '] }), Text({ dimColor: true, children: ['inbox'] }), ...recent] : []),
+        ...(noChannel ? [Text({ color: 'error', children: [G.cut + ' no channel · this session was not launched with cp3 run, so mail to it is never shown'] })] : []),
+        Box({ marginTop: 1, flexDirection: 'column', children: body }),
+        Box({
+          marginTop: 1,
+          children: [
+            Input({
+              key: 'send',
+              label: G.send + (draft.to ? ' to ' + draft.to : ''),
+              placeholder: draft.to ? 'message' : 'name message',
+              value: '',
+              submitLabel: 'send',
+              onSubmit: async (value) => {
+                const text = value.trim()
+                if (!text) return
+                let to = draft.to
+                let body = text
+                if (!to) {
+                  const sp = text.indexOf(' ')
+                  if (sp < 0) return
+                  to = text.slice(0, sp)
+                  body = text.slice(sp + 1)
+                }
+                const status = await send($, to, body)
+                $.ui.toast(G.send + ' ' + status)
+                draft.to = ''
+                $.ui.invalidate('ui.render')
+              },
+            }),
+          ],
+        }),
+        ...(recent.length
+          ? [
+              Box({ marginTop: 1, flexDirection: 'row', columnGap: 1, children: [Text({ dimColor: true, children: [G.inbox] }), Text({ dimColor: true, children: ['inbox'] })] }),
+              ...recent,
+            ]
+          : []),
       ],
     })
   })
+}
+
+function pick($, name) {
+  draft.to = draft.to === name ? '' : name
+  $.ui.invalidate('ui.render')
+}
+
+// Peers grouped by machine: this machine first, the rest by name. Inside a
+// group: you, then the live peers by name, then the ones that are down.
+function byMachine(rows, here) {
+  const m = new Map()
+  for (const p of rows) {
+    const k = p.machine || ''
+    if (!m.has(k)) m.set(k, [])
+    m.get(k).push(p)
+  }
+  const rank = (p) => (p.name === (me.name) ? 0 : p.up ? 1 : 2)
+  const order = (a, b) => rank(a) - rank(b) || byName(a, b)
+  return [...m.entries()]
+    .sort(([a], [b]) => (a === here ? -1 : b === here ? 1 : a < b ? -1 : a > b ? 1 : 0))
+    .map(([machine, peers]) => ({ machine, peers: peers.sort(order) }))
+}
+
+// ponytail: the fleet's hostnames say what they are; a real hardware field on
+// the peer record replaces this map the day one does not.
+function machineGlyph(machine, here) {
+  if (machine === here) return G.here
+  if (/mac/i.test(machine)) return G.mac
+  if (/pi|rasp/i.test(machine)) return G.pi
+  return G.box
+}
+
+function firstLine(content) {
+  return content.split('\n').find((l) => l.trim() && !l.startsWith('[')) ?? ''
 }
 
 function byName(a, b) {
@@ -240,13 +327,13 @@ async function refresh($) {
   try {
     const r = await $.process.run(['cp3', 'peers', '--json'], { timeoutMs: 8000 })
     if (r.exitCode !== 0) {
-      lastError = 'peers down'
+      lastError = 'no network'
     } else {
       roster = JSON.parse(r.stdout) ?? []
       lastError = ''
     }
   } catch {
-    lastError = 'peers down'
+    lastError = 'no network'
   }
   $.ui.invalidate('ui.render')
 }
@@ -309,7 +396,7 @@ async function onLine($, sid, line) {
   }
   if (ev.type === 'hello') {
     me = { name: ev.agent, machine: ev.machine, cwd: ev.cwd }
-    $.ui.invalidate('ui.render')
+    refresh($) // the roster now has us; do not wait a tick to say so
     return
   }
   if (ev.from && ev.content) {

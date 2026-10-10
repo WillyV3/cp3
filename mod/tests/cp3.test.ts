@@ -123,6 +123,29 @@ test('the band names this peer and counts the peers that are up', async ($, on) 
   // mod-test is not on the roster, so the band says so rather than claiming presence
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'mod-test' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: ' · not registered' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'not registered' })).toBeDefined()
+  await ui.unmount()
+})
+
+const PANE = {
+  plugin: 'cp3',
+  component: 'Pane',
+  requestId: 'cp3',
+  viewport: { columns: 120, rows: 40 },
+  props: { title: 'cp3', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+} as const
+
+test('the pane groups peers by machine, this machine first, when the roster spans more than one', async ($, on) => {
+  const runs: string[][] = []
+  stubCp3(on, { runs })
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+  await start($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'omarchy' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '· here' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'inspiron-omarchy' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '2 up · 1 away' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'fleet config' })).toBeDefined()
   await ui.unmount()
 })

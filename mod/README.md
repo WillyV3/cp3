@@ -6,10 +6,18 @@ on PATH (newer than 0.3.0, for `cp3 whoami` and `cp3 subscribe --deliver claude-
 
 What you get:
 
-- **A band above the prompt** — `● keeper · 14 peers · ✉2`, live. Replaces the statusline
-  segment, and never times out on a slow network: the roster is refreshed in the background.
-- **`/cp3`** — a pane with the fleet roster (name, machine, directory, summary, pending mail)
-  and a field to message any peer. `/cp3 jim hello` sends without opening the pane.
+- **A line above the prompt** — your peer name, how many peers are up (and on how many
+  machines), mail waiting. It only says more when something is wrong: not registered, no
+  channel, no network. The roster is refreshed in the background, so a slow network never
+  stalls the prompt the way the statusline segment can.
+- **`/cp3`** — the roster grouped by machine (this one first; no groups when there is only
+  one), you first, peers that are down last and faint. One row per peer: presence, name, mail
+  waiting, what it is doing (its summary, else its terminal title, else its directory). Click
+  a name to address it, type in the field to send, the last mail in sits underneath.
+  `/cp3 jim hello` sends without opening the pane.
+- **Theme and glyphs.** Every color is a Claude Code theme key (`success`, `warning`, `error`,
+  `claude`, `inactive`), so the mod follows your theme. Glyphs are Nerd Font codepoints, named
+  in the source by their nerdfonts.com names; without a Nerd Font they show as boxes.
 - **Claude's own `SendMessage` and `ListAgents` reach the fleet.** Claude Code's
   cross-session messaging only spans one machine unless both sides go through Anthropic's
   servers with Remote Control. With this mod, `ListAgents` also lists every cp3 peer, and
@@ -36,7 +44,7 @@ the inbox and the mod only draws and bridges. Without it, the mod owns both: it 
 ```sh
 claude --plugin-dir ~/projects/cp3/mod            # one session, hot-reloads on save
 claude plugin validate ~/projects/cp3/mod         # what it hooks and calls, without running it
-claude plugin test ~/projects/cp3/mod             # 7 tests, no session or network
+claude plugin test ~/projects/cp3/mod             # 8 tests, no session or network
 ```
 
 A mod runs with your permissions. `claude plugin validate` lists everything this one does:
