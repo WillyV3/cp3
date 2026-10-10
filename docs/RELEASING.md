@@ -10,7 +10,7 @@ and the Claude Code mod, which users install from this repository as a plugin ma
 2. `claude plugin validate . --strict && claude plugin validate mod --strict && claude plugin test mod`
 3. `go test ./...`
 4. `git tag vX.Y.Z && git push origin main vX.Y.Z`
-5. `mise x go@1.27.0 -- goreleaser release --clean` (the goreleaser shim is pinned to that Go).
+5. `GITHUB_TOKEN=$(gh auth token) mise x go@1.27.0 -- goreleaser release --clean` (the shim is pinned to that Go; goreleaser does not read gh's token on its own).
 6. Fleet: `ssh <host> 'sh -s' < install.sh` per machine, `cp3 doctor` on each.
    Mod: `claude plugin update cp3@cp3` on each machine that has it, or `cp3 setup --mod` on one that does not.
 
