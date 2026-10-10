@@ -4,6 +4,10 @@ A [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview) that 
 peer network inside Claude Code. Needs Claude Code 2.1.290 or later and the `cp3` binary
 on PATH (newer than 0.3.0, for `cp3 whoami` and `cp3 subscribe --deliver claude-socket`).
 
+![the cp3 pane: roster by machine, a message out, a message in](demo.gif)
+
+[demo.mp4](demo.mp4) is the same take; `demo.tape` records it with [vhs](https://github.com/charmbracelet/vhs).
+
 What you get:
 
 - **A line above the prompt** — your peer name, how many peers are up (and on how many
@@ -69,5 +73,6 @@ mod/
 ├── .claude-plugin/plugin.json   manifest
 ├── hooks/hooks.json             points at the module
 ├── hooks/cp3.mjs                the mod (one file; the cp3 binary is the only network code)
-└── tests/cp3.test.ts            claude plugin test
+├── tests/cp3.test.ts            claude plugin test
+└── demo.tape · demo.mp4 · demo.gif   the recording and how it was made
 ```

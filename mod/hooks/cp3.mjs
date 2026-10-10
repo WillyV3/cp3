@@ -226,6 +226,7 @@ export function register(on) {
           children: [
             Input({
               key: 'send',
+              autoFocus: true,
               label: G.send + (draft.to ? ' to ' + draft.to : ''),
               placeholder: draft.to ? 'message' : 'name message',
               value: '',
