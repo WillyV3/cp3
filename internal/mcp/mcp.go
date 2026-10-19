@@ -302,6 +302,9 @@ func Run() {
 
 	cwd, _ := os.Getwd()
 	parentPID := os.Getppid()
+	if old := yieldOlderSibling(parentPID); old != 0 {
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] stopped stale server pid %d left by this Claude session's earlier connection\n", old)
+	}
 	// Claude Code discards channel notifications from third-party MCP servers
 	// unless launched with --dangerously-load-development-channels. It reports
 	// nothing when it does — messages arrive, get written, and vanish.

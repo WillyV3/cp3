@@ -22,6 +22,9 @@ type sessionState struct {
 	// perfectly and Claude will silently discard every one. Surfaced in the
 	// statusline because nothing else reports it.
 	NoChannel bool `json:"noChannel,omitempty"`
+	// MCPPID is the `cp3 mcp` process that wrote this. A newer server for the
+	// same Claude pid uses it to stop its predecessor (see yieldOlderSibling).
+	MCPPID int `json:"mcpPid,omitempty"`
 }
 
 func stateDir() string {
@@ -62,7 +65,7 @@ func (s *server) writeState() {
 		return
 	}
 	os.MkdirAll(filepath.Dir(p), 0o700)
-	b, _ := json.Marshal(sessionState{Claimed: s.name(), Wanted: s.configured, NoChannel: s.noChannel})
+	b, _ := json.Marshal(sessionState{Claimed: s.name(), Wanted: s.configured, NoChannel: s.noChannel, MCPPID: os.Getpid()})
 	os.WriteFile(p, b, 0o600)
 	pruneStale(filepath.Dir(p))
 }
