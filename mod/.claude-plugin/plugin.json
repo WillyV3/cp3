@@ -1,6 +1,6 @@
 {
   "name": "cp3",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "cp3 peer network inside Claude Code: peers above the prompt, a /cp3 pane by machine, and the native SendMessage/ListAgents tools reach every peer on the fleet",
   "author": { "name": "WillyV3", "url": "https://github.com/WillyV3" },
   "homepage": "https://github.com/WillyV3/cp3/tree/main/mod",
