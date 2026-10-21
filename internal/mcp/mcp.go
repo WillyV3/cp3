@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -153,12 +151,11 @@ func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source st
 
 // parentHasChannelFlag reports whether the launching Claude loaded dev
 // channels. ps (not /proc) so this works on macOS too.
-func parentHasChannelFlag(pid int) bool {
-	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
+func parentHasChannelFlag(args string) bool {
+	if args == "" {
 		return true // can't tell — don't cry wolf
 	}
-	return strings.Contains(string(out), "--dangerously-load-development-channels")
+	return strings.Contains(args, "--dangerously-load-development-channels")
 }
 
 func env(k, def string) string {
@@ -261,7 +258,7 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 			s.me = claimIdentity(ctx, c, s.peer(), source)
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "[cp3-mcp] CLAUDE_PEERS_EPHEMERAL set: send-only, no presence")
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] ephemeral: send-only, no presence")
 	}
 	s.writeState() // statusline reads identity by claude-pid, not by cwd
 
@@ -308,7 +305,12 @@ func Run() {
 	// Claude Code discards channel notifications from third-party MCP servers
 	// unless launched with --dangerously-load-development-channels. It reports
 	// nothing when it does — messages arrive, get written, and vanish.
-	noChannel := !parentHasChannelFlag(parentPID)
+	args := parentArgs(parentPID)
+	ephemeralWhy := headlessReason(os.Getenv, args)
+	if ephemeralWhy != "" {
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] ephemeral: %s — send and list only, no name, no presence\n", ephemeralWhy)
+	}
+	noChannel := !parentHasChannelFlag(args) && ephemeralWhy == "" // a headless Claude shows nothing anyway
 	if noChannel {
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] WARNING: this Claude was launched without --dangerously-load-development-channels;")
 		fmt.Fprintln(os.Stderr, "[cp3-mcp] peer messages will be received and spooled but NEVER DISPLAYED. Relaunch with: cp3 run")
@@ -319,7 +321,7 @@ func Run() {
 		session:   env("CLAUDE_SESSION_ID", newSession()),
 		asName:    asFlag(),
 		parentPID: parentPID,
-		ephemeral: os.Getenv("CLAUDE_PEERS_EPHEMERAL") != "",
+		ephemeral: ephemeralWhy != "",
 		noChannel: noChannel,
 	})
 

@@ -53,6 +53,11 @@ runtime on the same machine, it claims `<name>-<runtime>` (e.g. `pith-pi`);
 the same runtime twice, or a twin on another machine, still gets the machine
 suffix.
 
+A Claude that another program drives (the Agent SDK, `claude -p`, pi running
+Claude through pi-claude-bridge) stays ephemeral: it can send and list but
+claims no name and shows no presence, so the session a person sits in keeps
+the directory's name. `CLAUDE_PEERS_EPHEMERAL=1` forces this for any session.
+
 Messages to offline agents queue durably and deliver on reconnect.
 
 ## Multiple machines
