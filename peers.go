@@ -59,6 +59,10 @@ type Peer struct {
 	Machine string `json:"machine"`
 	Cwd     string `json:"cwd"`
 	Session string `json:"session"`
+	// Runtime is the agent harness ("claude", "pi", "codex", "opencode"), or ""
+	// when the client did not say. Shown in rosters, and used to name a twin
+	// when two runtimes share a directory on one machine.
+	Runtime string `json:"runtime,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	// Title is harvested from the agent's own terminal title, NOT set by the
 	// agent. Kept separate from Summary on purpose: Summary means the agent
@@ -320,13 +324,15 @@ func (c *Client) Claim(ctx context.Context, p Peer) (*Peer, error) {
 	return nil, c.Register(ctx, p)
 }
 
-// ClaimWithFallback claims p.Agent, falling back to a machine-qualified name
-// when another live session holds it: "astrobot" taken -> "astrobot-macbook1".
-// Deterministic and self-describing — unlike ordinal suffixes, the fallback
-// says WHERE the twin lives (the usual cause: the same synced project dir
-// open on two machines). If even that is taken (same dir twice on one
-// machine), a short session tag breaks the tie. Returns the Peer actually
-// registered.
+// ClaimWithFallback claims p.Agent, falling back when another live session
+// holds it. Same machine but a different runtime (claude next to pi in one
+// dir) gets the runtime as the suffix: "astrobot" taken -> "astrobot-pi",
+// because the runtime says WHAT the twin is. Otherwise the fallback is a
+// machine-qualified name: "astrobot" taken -> "astrobot-macbook1". That is
+// deterministic and says WHERE the twin lives (the usual cause: the same
+// synced project dir open on two machines). If even that is taken (same dir
+// twice on one machine), a short session tag breaks the tie. Returns the Peer
+// actually registered.
 func (c *Client) ClaimWithFallback(ctx context.Context, p Peer) (Peer, error) {
 	holder, err := c.Claim(ctx, p)
 	if err == nil {
@@ -336,6 +342,16 @@ func (c *Client) ClaimWithFallback(ctx context.Context, p Peer) (Peer, error) {
 		return p, err
 	}
 	base := p.Agent
+	// A runtime twin on this machine is self-describing, so it beats the
+	// machine suffix. Cross-machine twins skip this and keep the machine suffix.
+	if r := SanitizeName(p.Runtime); r != "" && holder != nil && holder.Machine == p.Machine && holder.Runtime != p.Runtime {
+		p.Agent = base + "-" + r
+		if _, err := c.Claim(ctx, p); err == nil {
+			return p, nil
+		} else if !errors.Is(err, ErrNameTaken) {
+			return p, err
+		}
+	}
 	if m := SanitizeName(p.Machine); m != "" {
 		p.Agent = base + "-" + m
 		if _, err := c.Claim(ctx, p); err == nil {

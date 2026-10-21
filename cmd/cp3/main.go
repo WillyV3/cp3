@@ -195,8 +195,13 @@ func cmdSubscribe(args []string) {
 	machine := fs.String("machine", "", "machine")
 	cwd := fs.String("cwd", "", "working directory")
 	session := fs.String("session", "", "session id (default: sub-<pid>)")
+	runtime := fs.String("runtime", "", "agent harness this subscriber speaks for: claude, pi, codex, opencode")
 	deliver := fs.String("deliver", "stdout", "where inbound mail goes: stdout (one JSON line each) or claude-socket (this Claude Code session's inbox, read from CLAUDE_CODE_MESSAGING_SOCKET)")
 	fs.Parse(args)
+	// claude-socket only runs inside a Claude Code session, so the runtime is known.
+	if *runtime == "" && *deliver == "claude-socket" {
+		*runtime = "claude"
+	}
 	if *agent == "" {
 		*agent = callerIdentity()
 	}
@@ -238,7 +243,7 @@ func cmdSubscribe(args []string) {
 	defer c.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	p := peers.Peer{Agent: *agent, Machine: *machine, Cwd: *cwd, Session: *session}
+	p := peers.Peer{Agent: *agent, Machine: *machine, Cwd: *cwd, Session: *session, Runtime: *runtime}
 	hello := func(actual peers.Peer) { out.Hello(actual, os.Getpid()) }
 	err := bridge.RunWithClaim(ctx, c, p, hello, inject)
 	if err != nil {
@@ -351,6 +356,7 @@ type rosterRow struct {
 	Pending      uint64 `json:"pending"`
 	Machine      string `json:"machine,omitempty"`
 	Cwd          string `json:"cwd,omitempty"`
+	Runtime      string `json:"runtime,omitempty"`
 	Summary      string `json:"summary,omitempty"`
 	Title        string `json:"title,omitempty"`
 	LastMailSecs *int64 `json:"last_mail_secs,omitempty"`
@@ -366,7 +372,7 @@ func rosterJSON(list []peers.Peer, cons []peers.ConsumerStatus, now time.Time) [
 	rows := map[string]*rosterRow{}
 	for _, p := range list {
 		rows[p.Agent] = &rosterRow{
-			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Summary: p.Summary, Title: p.Title,
+			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Runtime: p.Runtime, Summary: p.Summary, Title: p.Title,
 		}
 	}
 	for _, cs := range cons {
@@ -437,9 +443,13 @@ func cmdPeers(args []string) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "AGENT\tMACHINE\tCWD")
+	fmt.Fprintln(w, "AGENT\tRUNTIME\tMACHINE\tCWD")
 	for _, p := range list {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", p.Agent, p.Machine, p.Cwd)
+		runtime := p.Runtime
+		if runtime == "" {
+			runtime = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Agent, runtime, p.Machine, p.Cwd)
 	}
 	w.Flush()
 }

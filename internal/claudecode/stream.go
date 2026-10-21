@@ -17,6 +17,7 @@ type Hello struct {
 	Agent   string `json:"agent"`
 	Machine string `json:"machine"`
 	Cwd     string `json:"cwd"`
+	Runtime string `json:"runtime,omitempty"`
 	PID     int    `json:"pid"`
 }
 
@@ -27,7 +28,7 @@ type Stream struct{ enc *json.Encoder }
 func NewStream(w io.Writer) *Stream { return &Stream{enc: json.NewEncoder(w)} }
 
 func (s *Stream) Hello(p peers.Peer, pid int) error {
-	return s.enc.Encode(Hello{Type: "hello", Agent: p.Agent, Machine: p.Machine, Cwd: p.Cwd, PID: pid})
+	return s.enc.Encode(Hello{Type: "hello", Agent: p.Agent, Machine: p.Machine, Cwd: p.Cwd, Runtime: p.Runtime, PID: pid})
 }
 
 func (s *Stream) Message(m peers.Message) error { return s.enc.Encode(m) }

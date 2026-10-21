@@ -131,7 +131,7 @@ func Run(args []string) {
 	if name == "" {
 		name = "codex-agent"
 	}
-	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("codex-%d", os.Getpid())}
+	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("codex-%d", os.Getpid()), Runtime: "codex"}
 	fmt.Fprintf(os.Stderr, "[cp3 codex] %s online, codex thread %s\n", name, started.Thread.ID)
 
 	err = bridge.Run(ctx, c, p, srv.deliver)
@@ -344,7 +344,7 @@ func runTUI(as string, srvArgs []string) {
 	}
 
 	host, _ := os.Hostname()
-	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("codex-%d", os.Getpid())}
+	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("codex-%d", os.Getpid()), Runtime: "codex"}
 	go func() {
 		err := bridge.Run(ctx, c, p, func(actual string, m peers.Message) error { return queue(ctx, remote, thread, actual, m) })
 		if err != nil && ctx.Err() == nil {

@@ -324,3 +324,75 @@ func TestRegisterIsReachable(t *testing.T) {
 		t.Error("INVARIANT VIOLATED: agent is on the roster but has no inbox")
 	}
 }
+
+// Two runtimes in one directory on one machine: the second gets a name that
+// says which runtime it is, not the machine it is on (both are the same box).
+func TestClaimWithFallbackRuntimeTwin(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx := context.Background()
+
+	holder := Peer{Agent: "proj", Machine: "m1", Session: "sess-claude", Runtime: "claude"}
+	if _, err := c.ClaimWithFallback(ctx, holder); err != nil {
+		t.Fatal(err)
+	}
+	pi := Peer{Agent: "proj", Machine: "m1", Session: "sess-pi", Runtime: "pi"}
+	got, err := c.ClaimWithFallback(ctx, pi)
+	if err != nil || got.Agent != "proj-pi" {
+		t.Fatalf("same-machine runtime twin: %q %v", got.Agent, err)
+	}
+}
+
+// A runtime twin on another machine keeps the machine suffix: the machine is
+// the distinguishing fact there, not the runtime.
+func TestClaimWithFallbackCrossMachineKeepsMachineSuffix(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx := context.Background()
+
+	holder := Peer{Agent: "proj", Machine: "m1", Session: "sess-claude", Runtime: "claude"}
+	if _, err := c.ClaimWithFallback(ctx, holder); err != nil {
+		t.Fatal(err)
+	}
+	pi := Peer{Agent: "proj", Machine: "m2", Session: "sess-pi", Runtime: "pi"}
+	got, err := c.ClaimWithFallback(ctx, pi)
+	if err != nil || got.Agent != "proj-m2" {
+		t.Fatalf("cross-machine twin: %q %v", got.Agent, err)
+	}
+}
+
+// Same runtime twice on one machine is the old case: machine suffix, then
+// the session tag. A runtime suffix here would name two identical claude
+// sessions "proj-claude", which says nothing new.
+func TestClaimWithFallbackSameRuntimeKeepsOldBehavior(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx := context.Background()
+
+	holder := Peer{Agent: "proj", Machine: "m1", Session: "sess-a", Runtime: "claude"}
+	if _, err := c.ClaimWithFallback(ctx, holder); err != nil {
+		t.Fatal(err)
+	}
+	second := Peer{Agent: "proj", Machine: "m1", Session: "sess-b", Runtime: "claude"}
+	got, err := c.ClaimWithFallback(ctx, second)
+	if err != nil || got.Agent != "proj-m1" {
+		t.Fatalf("same runtime twice: %q %v", got.Agent, err)
+	}
+}
+
+// A claimant that did not say its runtime gets the old machine suffix.
+func TestClaimWithFallbackNoRuntimeKeepsOldBehavior(t *testing.T) {
+	s := runServer(t)
+	c := newClient(t, s)
+	ctx := context.Background()
+
+	holder := Peer{Agent: "proj", Machine: "m1", Session: "sess-a", Runtime: "claude"}
+	if _, err := c.ClaimWithFallback(ctx, holder); err != nil {
+		t.Fatal(err)
+	}
+	unknown := Peer{Agent: "proj", Machine: "m1", Session: "sess-b"}
+	got, err := c.ClaimWithFallback(ctx, unknown)
+	if err != nil || got.Agent != "proj-m1" {
+		t.Fatalf("no runtime given: %q %v", got.Agent, err)
+	}
+}

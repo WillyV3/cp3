@@ -13,7 +13,7 @@ func TestRosterJSONKeepsDownPeerHoldingMail(t *testing.T) {
 	now := time.Now()
 	last := now.Add(-90 * time.Second)
 	got := rosterJSON(
-		[]peers.Peer{{Agent: "keeper", Machine: "omarchy", Cwd: "/p/cp3", Summary: "s"}},
+		[]peers.Peer{{Agent: "keeper", Machine: "omarchy", Cwd: "/p/cp3", Summary: "s", Runtime: "pi"}},
 		[]peers.ConsumerStatus{
 			{Name: "inbox-keeper", Pending: 0, LastDelivery: &last},
 			{Name: "inbox-sontara-web", Pending: 1},
@@ -25,7 +25,7 @@ func TestRosterJSONKeepsDownPeerHoldingMail(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 rows (up + down-with-mail), got %d: %+v", len(got), got)
 	}
-	if got[0].Name != "keeper" || !got[0].Up || got[0].Cwd != "/p/cp3" || got[0].Summary != "s" {
+	if got[0].Name != "keeper" || !got[0].Up || got[0].Cwd != "/p/cp3" || got[0].Summary != "s" || got[0].Runtime != "pi" {
 		t.Errorf("presence fields lost: %+v", got[0])
 	}
 	if got[0].LastMailSecs == nil || *got[0].LastMailSecs != 90 {

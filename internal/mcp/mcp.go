@@ -250,7 +250,7 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 				name, source = preferTeammateName(name, source)
 				if name != "" {
 					s.configured = name
-					s.me = claimIdentity(ctx, c, peers.Peer{Agent: name, Machine: s.machine, Cwd: s.cwd, Session: s.session}, source)
+					s.me = claimIdentity(ctx, c, peers.Peer{Agent: name, Machine: s.machine, Cwd: s.cwd, Session: s.session, Runtime: "claude"}, source)
 				}
 			}
 		} else {
@@ -420,7 +420,7 @@ func (s *server) tryReclaim(ctx context.Context) {
 	if want == "" || cur == want {
 		return
 	}
-	p := peers.Peer{Agent: want, Machine: s.machine, Cwd: s.cwd, Session: s.session}
+	p := peers.Peer{Agent: want, Machine: s.machine, Cwd: s.cwd, Session: s.session, Runtime: "claude"}
 	if _, err := s.c.Claim(ctx, p); err != nil {
 		return // still held; try again next tick
 	}
@@ -456,7 +456,7 @@ func (s *server) tryReclaim(ctx context.Context) {
 }
 
 func (s *server) peer() peers.Peer {
-	return peers.Peer{Agent: s.name(), Machine: s.machine, Cwd: s.cwd, Session: s.session}
+	return peers.Peer{Agent: s.name(), Machine: s.machine, Cwd: s.cwd, Session: s.session, Runtime: "claude"}
 }
 
 func (s *server) heartbeat(ctx context.Context) {
@@ -783,7 +783,7 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 			toolErr(s.t, id, "invalid agent name")
 			return
 		}
-		p := peers.Peer{Agent: a.Name, Machine: s.machine, Cwd: s.cwd, Session: s.session}
+		p := peers.Peer{Agent: a.Name, Machine: s.machine, Cwd: s.cwd, Session: s.session, Runtime: "claude"}
 		if holder, err := s.c.Claim(ctx, p); err == peers.ErrNameTaken {
 			toolErr(s.t, id, "name %q already held by session %s on %s", a.Name, holder.Session, holder.Machine)
 			return

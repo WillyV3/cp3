@@ -327,7 +327,7 @@ func Run(args []string) {
 	fmt.Fprintf(os.Stderr, "[cp3-opencode] %s on session %s%s at %s\n", name, session, joined, ocURL)
 
 	host, _ := os.Hostname()
-	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("oc-%d", os.Getpid())}
+	p := peers.Peer{Agent: name, Machine: host, Cwd: cwd, Session: fmt.Sprintf("oc-%d", os.Getpid()), Runtime: "opencode"}
 	go func() {
 		if err := bridge.Run(ctx, c, p, func(actual string, m peers.Message) error { return inject(ctx, session, actual, m) }); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, "[cp3-opencode] bridge:", err)
