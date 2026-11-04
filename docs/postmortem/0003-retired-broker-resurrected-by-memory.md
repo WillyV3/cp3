@@ -65,3 +65,23 @@ A memory or docs file is executable in the only sense that matters: agents act
 on it without re-checking. Corrections written into one must carry evidence and
 a date, and a correction that *reverses* an earlier correction must say so out
 loud — otherwise the next reader repeats the reasoning that produced the error.
+
+## Recurrence: 2026-10-10 (found 2026-11-01)
+
+Status: resolved 2026-11-01 — on Willy's "go": unit disabled and deleted, v1 binary renamed RETIRED-claude-peers-linux-amd64, :7899 closed, no claude-peers units remain enabled. ~/.local/bin/claude-peers was already a tombstone script (2026-08-06).
+
+- 10-10 03:24Z — a macbook1 session (`~/.claude/projects/-Users-williamvansickleiii/ee874bbc*.jsonl`),
+  working from a `~/.claude/CLAUDE.md` that still listed ":7899 claude-peers broker (UCAN auth)",
+  ssh'd to homelab and `nohup`'d `claude-peers-linux-amd64 broker`.
+- 10-10 16:44Z — the same session wrote `~/.config/systemd/user/claude-peers-broker.service`
+  (Restart=always) and ran `systemctl --user enable --now`, then kill-tested the auto-restart.
+- 10-10 17:16Z — keeper's correction ("that is the retired v1 broker, cp3 is NATS on :4222")
+  reached it via macbook1-home. It recorded the correction and did not stop the service.
+  keeper saw it running at the same time and called it "still running", not "resurrected".
+- 10-10 → 11-01 — up 22 days, one authenticated `/list-peers` from macbook1, zero peers.
+- 11-01 — macbook1-ops found it during a read-only sweep, corrected macbook1's CLAUDE.md to
+  cp3/NATS and marked v1 RETIRED. Not stopped; flagged for Willy.
+
+Same mechanism as above, new carrier: a stale per-machine CLAUDE.md instead of a memory file.
+The 08-05 open item (v1 binaries still on PATH, `~/projects/claude-peers/claude-peers-linux-amd64`
+dated 2026-04-11) was never closed and was again the trigger.
