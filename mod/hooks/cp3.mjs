@@ -218,7 +218,7 @@ export function register(on) {
           flexDirection: 'row',
           justifyContent: 'space-between',
           children: [
-            Box({ flexDirection: 'row', columnGap: 1, children: [Text({ color: 'claude', children: [G.net] }), Text({ bold: true, children: ['cp3'] })] }),
+            Box({ flexDirection: 'row', columnGap: 1, children: [Text({ color: 'claude', children: [G.net] }), Text({ weight: 'bold', children: ['cp3'] })] }),
             Text({ dimColor: true, children: [upCount + ' up' + (awayCount ? ' · ' + awayCount + ' away' : '')] }),
           ],
         }),
