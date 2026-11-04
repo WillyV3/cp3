@@ -196,12 +196,7 @@ func cmdSubscribe(args []string) {
 	cwd := fs.String("cwd", "", "working directory")
 	session := fs.String("session", "", "session id (default: sub-<pid>)")
 	runtime := fs.String("runtime", "", "agent harness this subscriber speaks for: claude, pi, codex, opencode")
-	deliver := fs.String("deliver", "stdout", "where inbound mail goes: stdout (one JSON line each) or claude-socket (this Claude Code session's inbox, read from CLAUDE_CODE_MESSAGING_SOCKET)")
 	fs.Parse(args)
-	// claude-socket only runs inside a Claude Code session, so the runtime is known.
-	if *runtime == "" && *deliver == "claude-socket" {
-		*runtime = "claude"
-	}
 	if *agent == "" {
 		*agent = callerIdentity()
 	}
@@ -219,26 +214,7 @@ func cmdSubscribe(args []string) {
 		*session = fmt.Sprintf("sub-%d", os.Getpid())
 	}
 	out := claudecode.NewStream(os.Stdout)
-	var inject func(actual string, m peers.Message) error
-	switch *deliver {
-	case "stdout":
-		inject = func(_ string, m peers.Message) error { return out.Message(m) }
-	case "claude-socket":
-		inbox, ok := claudecode.InboxFromEnv()
-		if !ok {
-			fmt.Fprintln(os.Stderr, "subscribe: --deliver claude-socket needs CLAUDE_CODE_MESSAGING_SOCKET (run as a child of a Claude Code session)")
-			os.Exit(2)
-		}
-		inject = func(_ string, m peers.Message) error {
-			if err := inbox.Post(claudecode.ReplyHint(m.From) + "\n" + m.Content); err != nil {
-				return err
-			}
-			return out.Message(m) // the supervising mod still sees every message
-		}
-	default:
-		fmt.Fprintln(os.Stderr, "subscribe: --deliver must be stdout or claude-socket")
-		os.Exit(2)
-	}
+	inject := func(_ string, m peers.Message) error { return out.Message(m) }
 	c := connect()
 	defer c.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -254,10 +230,10 @@ func cmdSubscribe(args []string) {
 
 // cmdWhoami prints the identity a cp3 command run from this spot would send
 // as: the MCP-claimed name of the enclosing Claude session when there is one,
-// else the directory identity. --json for programs (the Claude Code mod).
+// else the directory identity. --json for programs.
 func cmdWhoami(args []string) {
 	fs := flag.NewFlagSet("whoami", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "machine-readable: name, source, machine, cwd, mcp{claimed,wanted,noChannel}, channelFlag")
+	asJSON := fs.Bool("json", false, "machine-readable: name, source, machine, cwd, mcp{claimed,wanted}")
 	fs.Parse(args)
 	cwd, _ := os.Getwd()
 	s := claudecode.Describe(os.Getppid(), cwd)

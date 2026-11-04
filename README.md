@@ -21,12 +21,11 @@ go install github.com/WillyV3/cp3/cmd/cp3@latest
 
 ```sh
 cp3 setup        # wires the MCP server + statusline into Claude Code (no-clobber, .bak, idempotent)
-cp3 setup --mod  # also installs the cp3 mod: peers above the prompt, a /cp3 pane (Claude Code >= 2.1.292)
 cp3 doctor       # checks the chain, prints a fix for the first failure
 ```
 
-This repository is also a Claude Code plugin marketplace: `claude plugin install cp3 --marketplace WillyV3/cp3`
-is what `--mod` runs. See [mod/README.md](mod/README.md).
+Then start `claude` as usual. No launch flag: the MCP server posts peer mail
+into the session through Claude Code's own inbox socket.
 
 There is no server to configure: the first command that needs a network
 auto-starts one on localhost (embedded NATS JetStream, token-secured, state
@@ -35,7 +34,7 @@ in `~/.local/share/cp3`).
 ## Use
 
 ```sh
-cp3 run                      # launch claude with the peers channel loaded
+cp3 run --as api             # launch claude under a chosen peer name
 cp3 peers                    # who's online
 cp3 peers --wait api --timeout 45s   # block until a spawning peer registers (exit 0 = live)
 cp3 send --to frontend "does /api/v2/users paginate?"   # reports delivered / queued / NOT DELIVERED
@@ -75,15 +74,15 @@ a client.
 
 - Token required always, localhost included — generated on first run, stored
   0600 at `~/.config/cp3/token`, never in config files or argv.
-- Injection is opt-in per session: Claude Code only loads the channel when
-  launched with it (`cp3 run` does this).
+- Mail reaches a session only through Claude Code's per-session inbox socket,
+  authenticated with the token Claude Code hands its own children.
 - Remote URLs never auto-start a server.
 
 ## Teaching agents the network
 
 Claude Code learns automatically — `cp3 mcp` injects usage instructions and a
 live who's-online snapshot into every session, and each delivered message
-carries `how_to_reply`. For bash-only agents, `cp3 prompt` prints the canonical
+is headed with the sender and the tool to reply with. For bash-only agents, `cp3 prompt` prints the canonical
 usage block, and `cp3 setup --agents-md AGENTS.md` writes it into a file
 (marker-delimited, idempotent).
 
@@ -96,7 +95,7 @@ was down is delivered when it comes back.
 
 | Runtime | Start | Interactive TUI is the peer | Status |
 |---|---|---|---|
-| Claude Code | `cp3 run --as name` | yes | the reference. MCP tools (`list_peers`, `send_message`, `set_summary`, `check_messages`) inside the session. Or load the **cp3 mod** (`mod/`, Claude Code ≥ 2.1.290): a live roster band and `/cp3` pane, Claude's own `SendMessage`/`ListAgents` reach every fleet peer, and on a box without the MCP server plain `claude` is a peer with no dev-channel flag — see [mod/README.md](mod/README.md) |
+| Claude Code | `cp3 run --as name` | yes | the reference. MCP tools (`list_peers`, `send_message`, `set_summary`, `check_messages`) inside the session; plain `claude`, no flag |
 | opencode | `cp3 opencode --as name` | yes | **at parity for messaging.** Verified 2026-09-18 on opencode 1.18.30 (macOS arm64; also 1.17.13) and 1.18.31 (Linux): register, inbound renders in the TUI and runs a turn, reply lands under the right name, exit drops presence and stops the server it started, queued mail replays on restart. Gaps: no MCP tools inside opencode — the agent replies by running `cp3 send` from the hint on each message; no roster summary |
 | codex | `cp3 codex --as name` | yes | **at parity for messaging.** Verified 2026-09-18 on codex-cli 0.155.0 (Linux): register with cwd, inbound renders in the TUI and runs a turn, reply lands under the right name, exit stops the app-server it started and frees the name, queued mail replays on restart. cp3 runs its own `codex app-server` on a loopback port and the TUI attaches to it; startup costs one short briefing turn. Codex's default is read-only + ask, so it asks approval before its first `cp3 send`. For an unattended peer pass config overrides after `--` (they go to the app-server and the briefing — codex rejects permission flags on the TUI itself): `cp3 codex --as name -- -c sandbox_mode=\"workspace-write\" -c approval_policy=\"never\"`. Needs a working codex provider (login or `model_provider` in `~/.codex/config.toml`). Gaps: a message arriving mid-turn queues behind it (`--headless` can steer instead, but has no TUI); no MCP tools; no roster summary |
 | pi | copy `adapters/pi/peer.ts` to `~/.pi/agent/extensions/` (or `pi -e adapters/pi/peer.ts`) | yes | **at parity for messaging.** Verified 2026-10-21 on pi 1.3.0 (macOS arm64): claims its identity the same way Claude Code does (no env needed; `CLAUDE_PEERS_AGENT` still overrides), registers as runtime `pi` so a pi next to Claude in one dir is `<name>-pi`, a status line shows the claimed name, peers up, and mail waiting, inbound renders in the TUI and runs a turn, `peer_send` returns cp3's delivered/queued result, `list_peers` shows the roster with runtimes, exit frees the name. Needs a cp3 with `subscribe --runtime`. Gaps: no `set_summary` |

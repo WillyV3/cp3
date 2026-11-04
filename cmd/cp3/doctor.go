@@ -151,10 +151,9 @@ func cmdDoctor(args []string) {
 		}
 	}
 
-	// 6. how does Claude Code get mail: the mod (inbox socket) or the MCP server?
-	path, deliveryDetail := claudeDelivery(home)
-	report(path != "", false, "claude delivery", deliveryDetail,
-		"install the mod: cp3 setup --mod (or the MCP server: cp3 setup)")
+	// 6. Claude Code gets mail through the claude-peers MCP server.
+	ok, deliveryDetail := claudeDelivery(home)
+	report(ok, false, "claude delivery", deliveryDetail, "cp3 setup")
 
 	// 7. identity: what would THIS dir be called?
 	name, source := peers.ResolveIdentity(cwd, "")
@@ -167,54 +166,28 @@ func cmdDoctor(args []string) {
 		fmt.Printf("%s %s\n", paint(tty, cRed, "→ fix:"), firstFix)
 		os.Exit(1)
 	}
-	hint := " — start claude as usual"
-	if path == "mcp" {
-		hint = " — launch with the peers channel: cp3 run"
-	}
-	fmt.Println(paint(tty, cGreen, "everything healthy") + paint(tty, cDim, hint))
+	fmt.Println(paint(tty, cGreen, "everything healthy") + paint(tty, cDim, " — start claude as usual"))
 }
 
-// claudeDelivery reports which path Claude Code receives cp3 mail by: "mod"
-// when the cp3@cp3 plugin is installed and enabled, else "mcp" when a runnable
-// claude-peers MCP entry exists, else "" with why.
-func claudeDelivery(home string) (path, detail string) {
-	var installed struct {
-		Plugins map[string][]struct {
-			Version string `json:"version"`
-		} `json:"plugins"`
+// claudeDelivery reports whether a runnable claude-peers MCP entry exists in
+// ~/.claude.json: that server is how Claude Code receives cp3 mail.
+func claudeDelivery(home string) (ok bool, detail string) {
+	b, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return false, "no ~/.claude.json"
 	}
-	var settings struct {
-		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string `json:"command"`
+		} `json:"mcpServers"`
 	}
-	if b, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json")); err == nil {
-		json.Unmarshal(b, &installed)
+	json.Unmarshal(b, &cfg)
+	e, found := cfg.MCPServers["claude-peers"]
+	if !found {
+		return false, "no claude-peers entry in ~/.claude.json"
 	}
-	if b, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json")); err == nil {
-		json.Unmarshal(b, &settings)
+	if _, err := exec.LookPath(e.Command); err != nil {
+		return false, "mcp entry present but command not executable: " + e.Command
 	}
-	modNote := ""
-	if inst := installed.Plugins["cp3@cp3"]; len(inst) > 0 {
-		if settings.EnabledPlugins["cp3@cp3"] {
-			return "mod", "mod cp3@cp3 " + inst[0].Version + " (inbox socket)"
-		}
-		modNote = "mod cp3@cp3 installed but disabled; "
-	}
-
-	detail = modNote + "no mod and no claude-peers entry in ~/.claude.json"
-	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
-		var cfg struct {
-			MCPServers map[string]struct {
-				Command string `json:"command"`
-			} `json:"mcpServers"`
-		}
-		if json.Unmarshal(b, &cfg) == nil {
-			if e, ok := cfg.MCPServers["claude-peers"]; ok {
-				if _, lerr := exec.LookPath(e.Command); lerr != nil {
-					return "", modNote + "mcp entry present but command not executable: " + e.Command
-				}
-				return "mcp", "mcp claude-peers → " + e.Command
-			}
-		}
-	}
-	return "", detail
+	return true, "mcp claude-peers → " + e.Command
 }

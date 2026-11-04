@@ -1,9 +1,4 @@
-// Package claudecode is cp3's knowledge of the Claude Code host: how to find
-// the session a process runs under, and how to put a message in front of it.
-// Everything a Claude Code mod needs from cp3 is answered here and exposed as
-// plain commands (cp3 whoami, cp3 subscribe --deliver claude-socket), so the
-// mod itself stays a thin view with no protocol in it.
-package claudecode
+package mcp
 
 import (
 	"encoding/json"
@@ -15,7 +10,8 @@ import (
 
 // Inbox is a Claude Code session's cross-session message socket. Claude Code
 // exports the path and a per-session token to every child process it starts
-// (hooks, Bash commands, MCP servers, a mod's spawned processes).
+// (hooks, Bash commands, MCP servers). It is the only way cp3 puts a message
+// in front of a Claude session: no launch flag, no MCP notification.
 type Inbox struct {
 	Socket string
 	Token  string
@@ -37,7 +33,7 @@ func InboxFromEnv() (in Inbox, ok bool) {
 // its own session: an auth line, then one user message, each a JSON line on
 // a fresh connection. The auth line always goes — on macOS Claude Code can
 // only verify an exited child by its token. Verified on Claude Code 2.1.289
-// and 2.1.296, 2026-10-10.
+// 2.1.296 and 2.1.318 (2026-11-04, posted by a child of a live session).
 func (in Inbox) Post(text string) error {
 	if in.Socket == "" {
 		return fmt.Errorf("claude inbox: no socket")

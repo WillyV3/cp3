@@ -1,8 +1,8 @@
 // cp3-mcp — the Claude Code injection adapter for claude-peers v3.
 //
 // It is an MCP server (stdio JSON-RPC) that is ALSO a thin NATS client: peer
-// messages arrive on the durable inbox and are injected into the live Claude
-// session as notifications/claude/channel (the proven channel contract), while
+// messages arrive on the durable inbox and are posted into the live Claude
+// session through its cross-session inbox socket (no launch flag), while
 // the five tools (list_peers/send_message/set_summary/check_messages/
 // claim_agent_name) are backed by the NATS event log + presence KV.
 //
@@ -84,10 +84,6 @@ func (t *transport) respondErr(id any, code int, msg string) {
 	t.write(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": msg}})
 }
 
-func (t *transport) notify(method string, params any) {
-	t.write(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
-}
-
 // ---- identity ----
 
 func asFlag() string {
@@ -149,15 +145,6 @@ func claimIdentity(ctx context.Context, c *peers.Client, p peers.Peer, source st
 	return actual.Agent
 }
 
-// parentHasChannelFlag reports whether the launching Claude loaded dev
-// channels. ps (not /proc) so this works on macOS too.
-func parentHasChannelFlag(args string) bool {
-	if args == "" {
-		return true // can't tell — don't cry wolf
-	}
-	return strings.Contains(args, "--dangerously-load-development-channels")
-}
-
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -176,13 +163,12 @@ type server struct {
 	cwd        string
 	session    string
 
-	parentPID  int                // the claude process; keys the statusline state file
-	noChannel  bool               // parent lacks the dev-channel flag: injection is a no-op
-	pushCancel context.CancelFunc // stops inbox consumption if the name is lost
+	parentPID  int                     // the claude process; keys the statusline state file
+	post       func(text string) error // puts text in front of the session (Inbox.Post)
+	pushCancel context.CancelFunc      // stops inbox consumption if the name is lost
 
-	mu       sync.Mutex
-	unread   []peers.Message // buffered for check_messages fallback
-	notified []string        // spooled ids written to the channel, awaiting proof the client read them
+	mu     sync.Mutex
+	unread []peers.Message // received but not posted; check_messages hands them over
 }
 
 // sessionEnv is everything Run reads from the process world. Extracting it
@@ -197,7 +183,7 @@ type sessionEnv struct {
 	asName    string // --as flag
 	parentPID int
 	ephemeral bool // CLAUDE_PEERS_EPHEMERAL: send-only, no presence
-	noChannel bool // parent lacks the dev-channel flag
+	post      func(text string) error
 }
 
 // newServer resolves this session's identity and returns the server plus any
@@ -211,7 +197,7 @@ func newServer(ctx context.Context, c *peers.Client, t *transport, e sessionEnv)
 		cwd:       e.cwd,
 		session:   e.session,
 		parentPID: e.parentPID,
-		noChannel: e.noChannel,
+		post:      e.post,
 	}
 	// Headless one-shots (claude -p from daemons/crons) must not become
 	// addressable residents: no claim, no presence, no register event — they
@@ -302,18 +288,15 @@ func Run() {
 	if old := yieldOlderSibling(parentPID); old != 0 {
 		fmt.Fprintf(os.Stderr, "[cp3-mcp] stopped stale server pid %d left by this Claude session's earlier connection\n", old)
 	}
-	// Claude Code discards channel notifications from third-party MCP servers
-	// unless launched with --dangerously-load-development-channels. It reports
-	// nothing when it does — messages arrive, get written, and vanish.
-	args := parentArgs(parentPID)
-	ephemeralWhy := headlessReason(os.Getenv, args)
+	ephemeralWhy := headlessReason(os.Getenv, parentArgs(parentPID))
+	inbox, hasInbox := InboxFromEnv()
+	if ephemeralWhy == "" && !hasInbox {
+		// A Claude Code without the inbox socket cannot be shown a message.
+		// Joining as a named peer would take mail it never displays.
+		ephemeralWhy = "no CLAUDE_CODE_MESSAGING_SOCKET (Claude Code too old to receive peer mail)"
+	}
 	if ephemeralWhy != "" {
 		fmt.Fprintf(os.Stderr, "[cp3-mcp] ephemeral: %s — send and list only, no name, no presence\n", ephemeralWhy)
-	}
-	noChannel := !parentHasChannelFlag(args) && ephemeralWhy == "" // a headless Claude shows nothing anyway
-	if noChannel {
-		fmt.Fprintln(os.Stderr, "[cp3-mcp] WARNING: this Claude was launched without --dangerously-load-development-channels;")
-		fmt.Fprintln(os.Stderr, "[cp3-mcp] peer messages will be received and spooled but NEVER DISPLAYED. Relaunch with: cp3 run")
 	}
 	s, missed := newServer(ctx, c, newTransport(), sessionEnv{
 		cwd:       cwd,
@@ -322,7 +305,7 @@ func Run() {
 		asName:    asFlag(),
 		parentPID: parentPID,
 		ephemeral: ephemeralWhy != "",
-		noChannel: noChannel,
+		post:      inbox.Post,
 	})
 
 	if len(missed) > 0 {
@@ -350,8 +333,8 @@ func Run() {
 		// that's silently off the roster is worse than one that fails to
 		// start — the same principle nameLost already applies to a
 		// mid-session loss, this is its startup-collision counterpart.
-		// Delayed like the spool replay above: Claude Code's channel
-		// listener isn't ready the instant this MCP server starts.
+		// Delayed like the spool replay above, so the notice lands after
+		// the session's own startup output.
 		go func(name string) {
 			time.Sleep(replayDelay)
 			s.notifyStartupCollision(name)
@@ -451,10 +434,7 @@ func (s *server) tryReclaim(ctx context.Context) {
 		}(missed)
 	}
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] reclaimed %q (was %q)\n", want, old)
-	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": fmt.Sprintf("Identity repaired: you are now %q (the name freed up; %s). No action needed.", want, was),
-		"meta":    map[string]string{"from_agent": "cp3", "sent_at": time.Now().Format(time.RFC3339)},
-	})
+	s.notice(fmt.Sprintf("Identity repaired: you are now %q (the name freed up; %s). No action needed.", want, was))
 }
 
 func (s *server) peer() peers.Peer {
@@ -510,13 +490,7 @@ func (s *server) nameLost(cause error) {
 	s.setName("") // ephemeral until tryReclaim wins the name back
 	s.writeState()
 	fmt.Fprintf(os.Stderr, "[cp3-mcp] NAME LOST: %v — inbox consumption stopped\n", cause)
-	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", lost, cause),
-		"meta": map[string]string{
-			"from_agent": "cp3",
-			"sent_at":    time.Now().Format(time.RFC3339),
-		},
-	})
+	s.notice(fmt.Sprintf("Your peer name %q is now held by another session (%v). You have stopped receiving peer messages to avoid splitting the inbox. You can still send. No action needed: this session keeps watching and will re-claim the name automatically the moment it frees.", lost, cause))
 }
 
 // notifyStartupCollision is nameLost's counterpart for the case where this
@@ -526,37 +500,31 @@ func (s *server) nameLost(cause error) {
 // available) and folding them into one generic string would make one of the
 // two lie about what happened.
 func (s *server) notifyStartupCollision(name string) {
-	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": fmt.Sprintf("Your peer name %q is currently held by another session. You are running unnamed for now — messages sent to you will not arrive until this claims the name. You can still send. No action needed: this session keeps watching and will claim it automatically the moment it frees.", name),
-		"meta": map[string]string{
-			"from_agent": "cp3",
-			"sent_at":    time.Now().Format(time.RFC3339),
-		},
-	})
+	s.notice(fmt.Sprintf("Your peer name %q is currently held by another session. You are running unnamed for now — messages sent to you will not arrive until this claims the name. You can still send. No action needed: this session keeps watching and will claim it automatically the moment it frees.", name))
 }
 
-// pushLoop subscribes the durable inbox and injects each message into the live
-// Claude session as a channel notification (meta values MUST all be strings —
-// Claude Code silently drops notifications with non-string meta).
+// pushLoop subscribes the durable inbox and posts each message into the live
+// Claude session.
 func (s *server) pushLoop(ctx context.Context, name string) {
 	s.c.Subscribe(ctx, name, func(m peers.Message) {
-		// Durable FIRST: the notify below is fire-and-forget with no receipt,
-		// so a message must survive this process dying before it is seen.
+		// Durable FIRST: a message must survive this process dying before
+		// the post lands. The post's own success is the receipt that clears it.
 		spoolAppend(name, m)
-		s.mu.Lock()
-		s.unread = append(s.unread, m)
-		s.mu.Unlock()
-
 		s.notifyMessage(m, false)
-		s.mu.Lock()
-		s.notified = append(s.notified, m.ID)
-		s.mu.Unlock()
 	})
 }
 
-// notifyMessage injects one peer message into the live session. replay marks a
-// message a previous process received but never surfaced (spool replay), so
-// the agent knows why it is arriving late rather than treating it as new.
+// notice tells the session something about its own cp3 state.
+func (s *server) notice(text string) {
+	if err := s.post("[cp3] " + text); err != nil {
+		fmt.Fprintln(os.Stderr, "[cp3-mcp] notice not delivered:", err)
+	}
+}
+
+// notifyMessage posts one peer message into the live session and drops it from
+// the spool once the socket took it; a failed post leaves it for check_messages
+// and the next start. replay marks a message a previous process received but
+// never surfaced, so the agent knows why it is arriving late.
 func (s *server) notifyMessage(m peers.Message, replay bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -567,24 +535,34 @@ func (s *server) notifyMessage(m peers.Message, replay bool) {
 			break
 		}
 	}
-	content := m.Content
-	if replay {
-		content = "[delivered late — received while this session was restarting]\n" + content
+	if err := s.post(peerMessageText(m, from, replay)); err != nil {
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] message %s from %s not delivered: %v\n", m.ID, m.From, err)
+		s.mu.Lock()
+		s.unread = append(s.unread, m)
+		s.mu.Unlock()
+		return
 	}
-	s.t.notify("notifications/claude/channel", map[string]any{
-		"content": content,
-		"meta": map[string]string{
-			"message_id":   m.ID,
-			"from_agent":   m.From,
-			"from_machine": from.Machine,
-			"from_summary": from.Summary,
-			"from_cwd":     from.Cwd,
-			"sent_at":      time.UnixMilli(m.TS).Format(time.RFC3339),
-			// A naive session mid-context may have lost the init
-			// instructions — the notification itself carries the verb.
-			"how_to_reply": fmt.Sprintf("call send_message with to=%q", m.From),
-		},
-	})
+	spoolRemove(s.name(), []string{m.ID})
+}
+
+// peerMessageText is a peer message as the session reads it. Claude Code
+// frames socket mail as coming from another Claude session and suggests its
+// own SendMessage tool, which cannot reach a cp3 peer — so the header names
+// the tool that can.
+func peerMessageText(m peers.Message, from peers.Peer, replay bool) string {
+	where := from.Machine
+	if from.Cwd != "" {
+		where += " " + from.Cwd
+	}
+	h := fmt.Sprintf("[cp3 message from %s", m.From)
+	if where != "" {
+		h += " (" + strings.TrimSpace(where) + ")"
+	}
+	h += fmt.Sprintf(" — reply with the claude-peers send_message tool, to=%q, not SendMessage]", m.From)
+	if replay {
+		h += "\n[delivered late — received while this session was restarting]"
+	}
+	return h + "\n" + m.Content
 }
 
 func (s *server) peersList(ctx context.Context) []peers.Peer {
@@ -602,10 +580,6 @@ func (s *server) serve(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		// A request arriving AFTER we wrote a channel notification proves the
-		// client is alive and consuming this pipe — the receipt Claude never
-		// sends explicitly. Only then is a spooled message safe to drop.
-		s.confirmNotified()
 		switch req.Method {
 		case "initialize":
 			s.handleInit(req.ID)
@@ -623,25 +597,11 @@ func (s *server) serve(ctx context.Context) {
 	}
 }
 
-// confirmNotified clears spool entries whose notification the client has now
-// demonstrably read. Anything still unconfirmed when this process dies stays
-// spooled and replays on restart — which is the rover case, preserved.
-func (s *server) confirmNotified() {
-	s.mu.Lock()
-	ids := s.notified
-	s.notified = nil
-	s.mu.Unlock()
-	if len(ids) > 0 {
-		spoolRemove(s.name(), ids)
-	}
-}
-
 func (s *server) handleInit(id any) {
 	s.t.respond(id, map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
-			"experimental": map[string]any{"claude/channel": map[string]any{}},
-			"tools":        map[string]any{},
+			"tools": map[string]any{},
 		},
 		"serverInfo":   map[string]any{"name": "claude-peers", "version": "3.0.0"},
 		"instructions": instructions + s.fleetContext(context.Background()),

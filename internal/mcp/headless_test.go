@@ -15,7 +15,7 @@ func TestHeadlessReason(t *testing.T) {
 		want   string // substring of the reason, "" for a real session
 	}{
 		{"interactive claude", none, "claude", ""},
-		{"cp3 run", none, "claude --dangerously-load-development-channels server:claude-peers", ""},
+		{"plain claude", none, "claude", ""},
 		{"interactive with a -p inside a word", none, "claude --plugin-dir /x/mod --mcp-config /x/no-p.json", ""},
 		{"agent sdk child (pi-claude-bridge)", none, "claude --output-format stream-json --verbose --input-format stream-json --model claude-haiku-5-5 --strict-mcp-config", "stream-json"},
 		{"claude -p from a cron", none, `claude -p "summarize the logs"`, "-p"},

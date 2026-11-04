@@ -32,10 +32,3 @@ func (s *Stream) Hello(p peers.Peer, pid int) error {
 }
 
 func (s *Stream) Message(m peers.Message) error { return s.enc.Encode(m) }
-
-// ReplyHint is the line a message carries into a Claude Code session when it
-// arrives as a native message. The cp3 mod routes SendMessage to a peer name
-// over cp3, so the hint names that tool, not a shell command.
-func ReplyHint(from string) string {
-	return "[peer message from " + from + " over cp3 — reply with the SendMessage tool: to=\"" + from + "\"]"
-}

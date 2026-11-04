@@ -11,15 +11,9 @@ import (
 )
 
 // The JetStream ack means "this process received the bytes" — it does NOT mean
-// the human's session displayed them. Claude Code returns no receipt for a
-// channel notification, so a session that drops one (channel not loaded, busy,
-// mid-reconnect) used to lose the message permanently: the ack had already
-// advanced the durable consumer, and the only copy lived in a memory buffer
-// that died with the process.
-//
-// So user-delivery gets its own durable record: append to a per-agent spool
-// BEFORE notifying, and only remove once the agent has actually taken the
-// message (check_messages, or a startup replay into a live session). Transport
+// the session got them. So user-delivery gets its own durable record: append
+// to a per-agent spool BEFORE posting into the session, and remove only once
+// the post succeeded or check_messages handed the message over. Transport
 // ack and user delivery are now separate facts, which is what they always were.
 var spoolMu sync.Mutex
 
