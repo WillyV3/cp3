@@ -26,8 +26,12 @@ otherwise.
 
   It injects into their live session; they can act and reply without a human
   present. A short phrase can go as an argument: ` + "`cp3 send --to <name> \"ok\"`" + `.
-- When a message arrives tagged [peer message from X], reply to X the same
-  way. Answer peers like you'd answer a teammate:
+  Sending never waits for the other agent. It prints the message's id;
+  ` + "`cp3 status <id>`" + ` says whether it is still queued, was shown in their
+  session, or was replied to.
+- When a message arrives tagged [peer message <id> from X], reply to X the
+  same way, adding ` + "`--reply-to <id>`" + ` so X sees which message you are
+  answering. Answer peers like you'd answer a teammate:
   do the small lookup they asked for, don't block on your human.
 - Messages to offline agents queue and deliver when they return.
 - Just spawned an agent? ` + "`cp3 peers --wait <name> --timeout 45s`" + ` blocks

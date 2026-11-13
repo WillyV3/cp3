@@ -236,7 +236,7 @@ func waitForServer(ctx context.Context, timeout time.Duration) bool {
 // not honored for opencode.
 func inject(ctx context.Context, session, actual string, m peers.Message) error {
 	body, _ := json.Marshal(map[string]any{
-		"parts": []map[string]string{{"type": "text", "text": bridge.ReplyHint(actual, m.From) + "\n" + m.Content}},
+		"parts": []map[string]string{{"type": "text", "text": bridge.ReplyHint(actual, m) + "\n" + m.Content}},
 	})
 	req, _ := http.NewRequestWithContext(ctx, "POST", ocURL+"/session/"+session+"/prompt_async", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

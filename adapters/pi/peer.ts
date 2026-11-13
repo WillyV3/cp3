@@ -25,7 +25,7 @@ const STATUS_KEY = "cp3"
 const ROSTER_EVERY_MS = 15_000
 
 type Hello = { type: "hello"; agent: string }
-type Inbound = { from?: string; content?: string }
+type Inbound = { id?: string; from?: string; content?: string; replyTo?: string; quote?: string }
 type RosterRow = { name: string; up: boolean; pending: number; runtime?: string; machine?: string; cwd?: string; summary?: string }
 
 export default function (pi: ExtensionAPI) {
@@ -48,7 +48,7 @@ export default function (pi: ExtensionAPI) {
         return
       }
       const m = msg as Inbound
-      if (m.content) pi.sendUserMessage(`[peer message from ${m.from} over cp3 — reply with the peer_send tool: to="${m.from}"]
+      if (m.content) pi.sendUserMessage(`[peer message ${m.id} from ${m.from}${replyClause(m)} over cp3 — reply with the peer_send tool: to="${m.from}", reply_to="${m.id}"]
 ${m.content}`, { deliverAs: "steer" })
     })
 
@@ -68,6 +68,7 @@ ${m.content}`, { deliverAs: "steer" })
   const stop = () => {
     if (roster) clearInterval(roster)
     roster = undefined
+    sub?.removeAllListeners("exit") // we are ending it; pi's ctx is already gone
     sub?.kill()
     sub = undefined
   }
@@ -78,17 +79,35 @@ ${m.content}`, { deliverAs: "steer" })
     name: "peer_send",
     label: "Send peer message",
     description:
-      "Send a message to another coding-agent session on the cp3 peer network. Messages queue if the recipient is offline and deliver on reconnect. Use list_peers to see who is there.",
+      "Send a message to another coding-agent session on the cp3 peer network. It never waits for the recipient: messages queue if they are offline and deliver on reconnect. The result ends with the message's id, which peer_status takes. Use list_peers to see who is there.",
     parameters: Type.Object({
       to: Type.String({ description: "Recipient agent name, as list_peers shows it." }),
       message: Type.String({ description: "The message to send." }),
+      reply_to: Type.Optional(Type.String({ description: "When answering a peer message: the id from its header." })),
     }),
     async execute(_id, params) {
       if (!me) throw new Error("not on the cp3 network yet (no peer name held)")
       // cp3 reports delivered / queued / NOT DELIVERED; pass that through verbatim.
-      const { code, out } = await run(CP3, ["send", "--from", me, "--to", params.to, params.message])
+      const args = ["send", "--from", me, "--to", params.to]
+      if (params.reply_to) args.push("--reply-to", params.reply_to)
+      const { code, out } = await run(CP3, [...args, params.message])
       if (code !== 0 && code !== 3) throw new Error(out || `cp3 send exited ${code}`)
       return { content: [{ type: "text", text: out }], details: { to: params.to, code } }
+    },
+  })
+
+  pi.registerTool({
+    name: "peer_status",
+    label: "Peer message status",
+    description:
+      "How far a message you sent got: no receipt yet (still queued), shown (it reached the recipient's live session), or replied. Returns at once; use it instead of waiting.",
+    parameters: Type.Object({
+      id: Type.String({ description: "The message id peer_send returned." }),
+    }),
+    async execute(_id, params) {
+      const { code, out } = await run(CP3, ["status", params.id])
+      if (code !== 0) throw new Error(out || `cp3 status exited ${code}`)
+      return { content: [{ type: "text", text: out }], details: { id: params.id } }
     },
   })
 
@@ -130,6 +149,12 @@ async function fetchRoster(): Promise<RosterRow[]> {
 
 function status(ctx: ExtensionContext, text: string) {
   if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, text)
+}
+
+// What a message answers, as cp3 words it for every runtime.
+function replyClause(m: Inbound): string {
+  if (!m.replyTo) return ""
+  return `, replying to your message ${m.replyTo}` + (m.quote ? ` (${JSON.stringify(m.quote)})` : "")
 }
 
 function parse(line: string): Hello | Inbound | undefined {

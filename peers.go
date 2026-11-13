@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +42,13 @@ const (
 	EventDeregister EventType = "deregister"
 	EventPresence   EventType = "presence"
 	EventMessage    EventType = "message"
+	EventReceipt    EventType = "receipt"
 )
+
+// Version is the cp3 build this process runs, stamped into its presence
+// record so a roster can show which sessions still run an old build. The
+// binary sets it once at startup; it never travels with a message.
+var Version string
 
 // Envelope is the versioned wire contract every consumer builds against.
 type Envelope struct {
@@ -70,7 +77,9 @@ type Peer struct {
 	// a pane and may lag the real work. Conflating "agent said" with
 	// "terminal said" is the same class of error as ack-without-injection.
 	Title string `json:"title,omitempty"`
-	TS    int64  `json:"ts"`
+	// Version is the cp3 build holding this name. Debugging only.
+	Version string `json:"version,omitempty"`
+	TS      int64  `json:"ts"`
 }
 
 // Message is a peer-to-peer message payload.
@@ -81,6 +90,23 @@ type Message struct {
 	Content   string `json:"content"`
 	DeliverAs string `json:"deliverAs"`
 	TS        int64  `json:"ts"`
+	// ReplyTo is the ID of the message this one answers. Quote is the first
+	// line of that message, filled in by Send, so whoever reads the reply
+	// sees what it is a reply to without keeping any state of their own.
+	ReplyTo string `json:"replyTo,omitempty"`
+	Quote   string `json:"quote,omitempty"`
+}
+
+// ReplyClause says what a message answers, for the header an adapter puts
+// above it. Empty for a message that is not a reply.
+func (m Message) ReplyClause() string {
+	if m.ReplyTo == "" {
+		return ""
+	}
+	if m.Quote == "" {
+		return ", replying to your message " + m.ReplyTo
+	}
+	return fmt.Sprintf(", replying to your message %s (%q)", m.ReplyTo, m.Quote)
 }
 
 // Client wraps a NATS connection + JetStream + the presence KV.
@@ -127,6 +153,24 @@ func URLFromEnv() string {
 		return url // hooks/statusline have no shell env
 	}
 	return "nats://127.0.0.1:4222"
+}
+
+// replicasFromEnv is how many servers of a NATS cluster keep a copy of the log
+// and the roster: CP3_REPLICAS, then ~/.config/cp3/replicas. 0 means not set.
+// Only a clustered server can honour more than 1; a single server refuses it.
+func replicasFromEnv() (int, error) {
+	v := os.Getenv("CP3_REPLICAS")
+	if v == "" {
+		v = strings.TrimSpace(readConfigFile("replicas"))
+	}
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 5 {
+		return 0, fmt.Errorf("replicas: %q is not a number from 1 to 5", v)
+	}
+	return n, nil
 }
 
 // readConfigFile returns the contents of ~/.config/cp3/<name>, or "".
@@ -181,8 +225,25 @@ func (c *Client) NATS() *nats.Conn { return c.nc }
 // Setup ensures the PEERS stream (the log) and PEERS_PRESENCE KV exist.
 // Idempotent — safe to call on every start.
 func (c *Client) Setup(ctx context.Context) error {
-	_, err := c.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+	replicas, err := replicasFromEnv()
+	if err != nil {
+		return err
+	}
+	if replicas == 0 {
+		// Not configured here: keep what the server has. An update that names
+		// no replica count means one, so a client without the setting would
+		// otherwise scale a clustered log back down to a single copy.
+		s, err := c.js.Stream(ctx, streamName)
+		switch {
+		case err == nil:
+			replicas = s.CachedInfo().Config.Replicas
+		case !errors.Is(err, jetstream.ErrStreamNotFound):
+			return fmt.Errorf("read stream: %w", err)
+		}
+	}
+	_, err = c.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:       streamName,
+		Replicas:   replicas,
 		Subjects:   []string{subjectAll},
 		Storage:    jetstream.FileStorage,
 		MaxAge:     retentionAge,
@@ -195,8 +256,9 @@ func (c *Client) Setup(ctx context.Context) error {
 		return fmt.Errorf("create stream: %w", err)
 	}
 	kv, err := c.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket: presenceKV,
-		TTL:    presenceTTL,
+		Bucket:   presenceKV,
+		TTL:      presenceTTL,
+		Replicas: replicas,
 	})
 	if err != nil {
 		return fmt.Errorf("create kv: %w", err)
@@ -217,6 +279,10 @@ func (c *Client) kvBucket(ctx context.Context) (jetstream.KeyValue, error) {
 	c.kv = kv
 	return kv, nil
 }
+
+// NewID returns a fresh message ID. A caller that needs to tell its user the
+// ID sets it on the Message before Send; Send assigns one otherwise.
+func NewID() string { return newID() }
 
 func newID() string {
 	var b [16]byte
@@ -291,6 +357,9 @@ func (c *Client) putPresence(ctx context.Context, p Peer) error {
 	kv, err := c.kvBucket(ctx)
 	if err != nil {
 		return err
+	}
+	if p.Version == "" {
+		p.Version = Version
 	}
 	val, err := json.Marshal(p)
 	if err != nil {
@@ -590,13 +659,144 @@ func (c *Client) Send(ctx context.Context, m Message) (DeliveryStatus, error) {
 	if m.TS == 0 {
 		m.TS = nowMillis()
 	}
+	if m.ReplyTo != "" {
+		// The ID in a reply comes from a header that only a receiver which
+		// also records the receipt ever prints, so a miss is a wrong ID.
+		shown, err := c.lastReceipt(ctx, m.ReplyTo, receiptShown)
+		if err != nil {
+			return NoInbox, err
+		}
+		if shown == nil {
+			return NoInbox, fmt.Errorf("%w: %q — copy the id from the message header, or send without a reply-to", ErrUnknownMessage, m.ReplyTo)
+		}
+		m.Quote = shown.Quote
+	}
 	// Probe BEFORE publishing: after the write the consumer may have already
 	// picked it up, which would make a live agent look merely queued.
 	status := c.deliveryStatus(ctx, m.To)
 	if err := c.publish(ctx, "peers.msg."+m.To, EventMessage, m.From, m); err != nil {
 		return status, err
 	}
+	if m.ReplyTo != "" && status != NoInbox {
+		r := Receipt{ID: m.ReplyTo, State: receiptReplied, By: m.From, ReplyID: m.ID, TS: m.TS}
+		if err := c.publishReceipt(ctx, r); err != nil {
+			return status, fmt.Errorf("message %s was sent, but its reply link was not recorded: %w", m.ID, err)
+		}
+	}
 	return status, nil
+}
+
+// ErrUnknownMessage is returned for a reply to a message ID nobody was shown.
+var ErrUnknownMessage = errors.New("no such message")
+
+const (
+	receiptShown   = "shown"
+	receiptReplied = "replied"
+)
+
+// Receipt is what happened to a message after it was sent. The sender never
+// waits on one: receipts sit on the log under peers.receipt.<id>.<state> and
+// are read on demand by Status.
+type Receipt struct {
+	ID      string `json:"id"`                // the message this is about
+	State   string `json:"state"`             // "shown" or "replied"
+	By      string `json:"by"`                // whose session it reached, or who replied
+	From    string `json:"from,omitempty"`    // shown: the original sender
+	Quote   string `json:"quote,omitempty"`   // shown: first line of the original
+	ReplyID string `json:"replyId,omitempty"` // replied: the reply's own ID
+	TS      int64  `json:"ts"`
+}
+
+func validMessageID(id string) error {
+	if id == "" || len(id) > 64 || strings.Trim(id, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-") != "" {
+		return fmt.Errorf("%w: %q is not a message id", ErrUnknownMessage, id)
+	}
+	return nil
+}
+
+func (c *Client) publishReceipt(ctx context.Context, r Receipt) error {
+	if err := validMessageID(r.ID); err != nil {
+		return err
+	}
+	return c.publish(ctx, "peers.receipt."+r.ID+"."+r.State, EventReceipt, r.By, r)
+}
+
+// Shown records that m reached by's live session: the runtime accepted it.
+// It does not mean the model read it; only a reply proves that.
+func (c *Client) Shown(ctx context.Context, m Message, by string) error {
+	return c.publishReceipt(ctx, Receipt{ID: m.ID, State: receiptShown, By: by, From: m.From, Quote: firstLine(m.Content), TS: nowMillis()})
+}
+
+// firstLine is the first non-blank line of s, cut to 80 characters.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			if r := []rune(line); len(r) > 80 {
+				return string(r[:79]) + "…"
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+// lastReceipt returns the newest receipt of one state for a message, or nil.
+func (c *Client) lastReceipt(ctx context.Context, id, state string) (*Receipt, error) {
+	if err := validMessageID(id); err != nil {
+		return nil, err
+	}
+	s, err := c.js.Stream(ctx, streamName)
+	if err != nil {
+		return nil, fmt.Errorf("read stream: %w", err)
+	}
+	raw, err := s.GetLastMsgForSubject(ctx, "peers.receipt."+id+"."+state)
+	if errors.Is(err, jetstream.ErrMsgNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read receipt: %w", err)
+	}
+	var env Envelope
+	var r Receipt
+	if err := json.Unmarshal(raw.Data, &env); err != nil {
+		return nil, fmt.Errorf("receipt envelope: %w", err)
+	}
+	if err := json.Unmarshal(env.Data, &r); err != nil {
+		return nil, fmt.Errorf("receipt: %w", err)
+	}
+	return &r, nil
+}
+
+// MessageStatus is what the log knows about one sent message.
+type MessageStatus struct {
+	ID      string   `json:"id"`
+	Shown   *Receipt `json:"shown,omitempty"`
+	Replied *Receipt `json:"replied,omitempty"`
+}
+
+// Status reports how far a sent message got. It reads the log and returns;
+// nothing blocks on the recipient.
+func (c *Client) Status(ctx context.Context, id string) (MessageStatus, error) {
+	st := MessageStatus{ID: id}
+	var err error
+	if st.Shown, err = c.lastReceipt(ctx, id, receiptShown); err != nil {
+		return st, err
+	}
+	st.Replied, err = c.lastReceipt(ctx, id, receiptReplied)
+	return st, err
+}
+
+// Human is the one-line answer for a CLI or a tool result.
+func (s MessageStatus) Human() string {
+	at := func(ts int64) string { return time.UnixMilli(ts).Format("Jan 2 15:04:05") }
+	switch {
+	case s.Replied != nil:
+		return fmt.Sprintf("replied: %s answered %s at %s (reply id %s)", s.Replied.By, s.ID, at(s.Replied.TS), s.Replied.ReplyID)
+	case s.Shown != nil:
+		return fmt.Sprintf("shown: %s reached %s's live session at %s; no reply yet", s.ID, s.Shown.By, at(s.Shown.TS))
+	default:
+		return fmt.Sprintf("no receipt for %s: still queued, or the recipient runs a cp3 older than 0.6.0, or the id is wrong", s.ID)
+	}
 }
 
 // deliveryStatus inspects the recipient's durable inbox. An error reading the

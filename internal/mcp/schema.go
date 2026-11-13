@@ -11,14 +11,26 @@ var toolSchemas = []map[string]any{
 	},
 	{
 		"name":        "send_message",
-		"description": "Send a message to another session by agent name. READ THE RESULT: it reports one of three real outcomes — \"delivered\" (a live session is consuming it now), \"queued\" (their inbox exists; it arrives when they reconnect), or \"NOT DELIVERED\" (no inbox exists for that name — nothing is subscribed, so the message will never be read; verify the name with list_peers). Do not assume success.",
+		"description": "Send a message to another session by agent name. It never waits for the recipient. READ THE RESULT: it reports one of three real outcomes — \"delivered\" (a live session is consuming it now), \"queued\" (their inbox exists; it arrives when they reconnect), or \"NOT DELIVERED\" (no inbox exists for that name — nothing is subscribed, so the message will never be read; verify the name with list_peers). Do not assume success. The result ends with the message's id, which message_status takes.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"to":      map[string]any{"type": "string", "description": "Recipient agent name (from list_peers)."},
-				"message": map[string]any{"type": "string", "description": "The message to send."},
+				"to":       map[string]any{"type": "string", "description": "Recipient agent name (from list_peers)."},
+				"message":  map[string]any{"type": "string", "description": "The message to send."},
+				"reply_to": map[string]any{"type": "string", "description": "When answering a peer message: the id from its header. Links your reply to their message."},
 			},
 			"required": []string{"to", "message"},
+		},
+	},
+	{
+		"name":        "message_status",
+		"description": "How far a message you sent got: no receipt yet (still queued), shown (it reached the recipient's live session), or replied (they answered it with reply_to). Returns at once; use it instead of waiting.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "The message id send_message returned."},
+			},
+			"required": []string{"id"},
 		},
 	},
 	{
@@ -60,14 +72,17 @@ IDENTITY:
 - Agent names are globally unique while held. A live holder keeps the name; a dead session's name frees automatically.
 
 MESSAGING:
-- Delivery: a peer message arrives in this session as a message headed "[cp3 message from <name> ...]". You don't need to poll.
-- To reply, call this server's send_message with to = that name. Claude Code's own SendMessage tool cannot reach cp3 peers.
+- Delivery: a peer message arrives in this session as a message headed "[cp3 message <id> from <name> ...]". You don't need to poll.
+- To reply, call this server's send_message with to = that name and reply_to = that id. Claude Code's own SendMessage tool cannot reach cp3 peers.
+- A reply to something you sent is headed "... replying to your message <id> (its first line)".
+- Sending never blocks. To learn whether a message you sent was shown or answered, call message_status with the id send_message returned.
 - send_message reports which of three things actually happened, and you should read it: "delivered" (a live session is consuming now), "queued" (their inbox exists; it lands when they reconnect), or "NOT DELIVERED ... has no inbox" (nothing is subscribed to that name — the message will never be read; check the exact name in list_peers). Only the third is a failure, and it is loud on purpose.
 
 
 TOOLS:
 - list_peers: Discover sessions on the network.
-- send_message(to, message): Send a message by agent name.
+- send_message(to, message, reply_to?): Send a message by agent name.
+- message_status(id): Whether a message you sent is still queued, was shown, or was replied to.
 - set_summary(summary): Set your current-work summary.
 - check_messages: Messages that arrived but could not be posted into this session.
 - claim_agent_name(name): Claim a stable name mid-session.`

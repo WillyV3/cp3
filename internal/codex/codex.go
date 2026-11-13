@@ -215,7 +215,7 @@ func (s *appServer) deliver(actual string, m peers.Message) error {
 	s.mu.Lock()
 	thread, turn := s.thread, s.turn
 	s.mu.Unlock()
-	text := bridge.ReplyHint(actual, m.From) + "\n" + m.Content
+	text := bridge.ReplyHint(actual, m) + "\n" + m.Content
 	input := []map[string]any{{"type": "text", "text": text}}
 	if turn != "" {
 		_, err := s.request("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": turn})
@@ -250,7 +250,7 @@ func threadFromExec(jsonl []byte) string {
 
 // queue injects one peer message into the live thread.
 func queue(ctx context.Context, remote, thread, actual string, m peers.Message) error {
-	text := bridge.ReplyHint(actual, m.From) + "\n" + m.Content
+	text := bridge.ReplyHint(actual, m) + "\n" + m.Content
 	out, err := exec.CommandContext(ctx, codexBin, "queue", "--remote", remote, "--thread", thread, "--message", text).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("codex queue: %v: %s", err, strings.TrimSpace(string(out)))

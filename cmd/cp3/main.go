@@ -37,6 +37,7 @@ func connect() *peers.Client {
 var version = "dev" // set by goreleaser ldflags
 
 func main() {
+	peers.Version = version
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -44,6 +45,8 @@ func main() {
 	switch os.Args[1] {
 	case "send":
 		cmdSend(os.Args[2:])
+	case "status":
+		cmdStatus(os.Args[2:])
 	case "peers":
 		cmdPeers(os.Args[2:])
 	case "watch":
@@ -83,7 +86,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|version|prompt|peers|whoami|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode|codex> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cp3 <serve|send|status|version|prompt|peers|whoami|watch|register|subscribe|consumers|statusline|doctor|setup|run|mcp|opencode|codex> [flags]")
 }
 
 // consumerVerdict classifies a consumer's liveness — the check that would have
@@ -254,6 +257,7 @@ func cmdSend(args []string) {
 	from := fs.String("from", "", "sender agent (defaults to this dir's identity)")
 	to := fs.String("to", "", "recipient agent")
 	mode := fs.String("mode", "steer", "delivery mode: steer|queue")
+	replyTo := fs.String("reply-to", "", "id of the peer message this answers (from its header)")
 	fs.Parse(args)
 	content, err := messageText(fs.Args(), os.Stdin)
 	if err != nil {
@@ -274,15 +278,40 @@ func cmdSend(args []string) {
 		fmt.Fprintln(os.Stderr, "setup:", err)
 		os.Exit(1)
 	}
-	status, err := c.Send(ctx, peers.Message{From: *from, To: *to, Content: content, DeliverAs: *mode})
+	m := peers.Message{ID: peers.NewID(), From: *from, To: *to, Content: content, DeliverAs: *mode, ReplyTo: *replyTo}
+	status, err := c.Send(ctx, m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "send:", err)
 		os.Exit(1)
 	}
-	fmt.Println(status.Human(*to))
+	fmt.Printf("%s · id %s\n", status.Human(*to), m.ID)
 	if status == peers.NoInbox {
 		os.Exit(3) // scripts must be able to detect a message that went nowhere
 	}
+}
+
+// cmdStatus reports how far a sent message got: no receipt, shown, or
+// replied. It reads the log and returns; it never waits on the recipient.
+func cmdStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "machine-readable: id, shown{by,ts,...}, replied{by,replyId,ts}")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "status: usage: cp3 status <message-id>   (the id cp3 send printed)")
+		os.Exit(2)
+	}
+	c := connect()
+	defer c.Close()
+	st, err := c.Status(context.Background(), fs.Arg(0))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "status:", err)
+		os.Exit(1)
+	}
+	if *asJSON {
+		json.NewEncoder(os.Stdout).Encode(st)
+		return
+	}
+	fmt.Println(st.Human())
 }
 
 // messageText is the message from argv, or from stdin when there are no
@@ -355,6 +384,7 @@ type rosterRow struct {
 	Runtime      string `json:"runtime,omitempty"`
 	Summary      string `json:"summary,omitempty"`
 	Title        string `json:"title,omitempty"`
+	Version      string `json:"version,omitempty"`
 	LastMailSecs *int64 `json:"last_mail_secs,omitempty"`
 }
 
@@ -368,7 +398,7 @@ func rosterJSON(list []peers.Peer, cons []peers.ConsumerStatus, now time.Time) [
 	rows := map[string]*rosterRow{}
 	for _, p := range list {
 		rows[p.Agent] = &rosterRow{
-			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Runtime: p.Runtime, Summary: p.Summary, Title: p.Title,
+			Name: p.Agent, Up: true, Machine: p.Machine, Cwd: p.Cwd, Runtime: p.Runtime, Summary: p.Summary, Title: p.Title, Version: p.Version,
 		}
 	}
 	for _, cs := range cons {
@@ -407,6 +437,7 @@ func cmdPeers(args []string) {
 	wait := fs.String("wait", "", "block until this agent registers; exit 0 when it does, non-zero on timeout")
 	timeout := fs.Duration("timeout", 30*time.Second, "how long --wait waits")
 	asJSON := fs.Bool("json", false, "one-shot machine-readable roster: presence UNION inboxes, so down peers holding mail still appear")
+	verbose := fs.Bool("verbose", false, "debugging: add each peer's cp3 version (- for a build older than 0.6.0)")
 	fs.Parse(args)
 	c := connect()
 	defer c.Close()
@@ -439,13 +470,23 @@ func cmdPeers(args []string) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "AGENT\tRUNTIME\tMACHINE\tCWD")
-	for _, p := range list {
-		runtime := p.Runtime
-		if runtime == "" {
-			runtime = "-"
+	dash := func(s string) string {
+		if s == "" {
+			return "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Agent, runtime, p.Machine, p.Cwd)
+		return s
+	}
+	head := "AGENT\tRUNTIME\tMACHINE\tCWD"
+	if *verbose {
+		head += "\tCP3"
+	}
+	fmt.Fprintln(w, head)
+	for _, p := range list {
+		row := fmt.Sprintf("%s\t%s\t%s\t%s", p.Agent, dash(p.Runtime), p.Machine, p.Cwd)
+		if *verbose {
+			row += "\t" + dash(p.Version)
+		}
+		fmt.Fprintln(w, row)
 	}
 	w.Flush()
 }

@@ -209,3 +209,53 @@ func spoolPeek(t *testing.T, agent string) []peers.Message {
 	}
 	return msgs
 }
+
+// The reply link through the MCP server: the header carries the id to answer
+// with, a successful post records the receipt, the reply links back, and
+// message_status reads each stage without waiting on anyone.
+func TestReplyLinkThroughTheServer(t *testing.T) {
+	s, buf := testServer(t, "reader")
+	ctx := context.Background()
+	if err := s.c.Register(ctx, peers.Peer{Agent: "asker", Session: "s-asker"}); err != nil {
+		t.Fatal(err)
+	}
+	var posted []string
+	s.post = func(text string) error { posted = append(posted, text); return nil }
+
+	q := peers.Message{ID: peers.NewID(), From: "asker", To: "reader", Content: "which port?"}
+	if out := call(t, s, buf, "message_status", map[string]string{"id": q.ID}); !strings.Contains(out, "no receipt") {
+		t.Errorf("before delivery: %s", out)
+	}
+	s.notifyMessage(q, false)
+	if len(posted) != 1 || !strings.Contains(posted[0], "[cp3 message "+q.ID+" from asker") || !strings.Contains(posted[0], `reply_to="`+q.ID+`"`) {
+		t.Fatalf("header does not carry the id to reply with: %q", posted)
+	}
+	if out := call(t, s, buf, "message_status", map[string]string{"id": q.ID}); !strings.Contains(out, "shown") || !strings.Contains(out, "reader") {
+		t.Errorf("after post: %s", out)
+	}
+
+	out := call(t, s, buf, "send_message", map[string]string{"to": "asker", "message": "4222", "reply_to": q.ID})
+	if !strings.Contains(out, " · id ") {
+		t.Errorf("send result carries no id: %s", out)
+	}
+	if out := call(t, s, buf, "message_status", map[string]string{"id": q.ID}); !strings.Contains(out, "replied") {
+		t.Errorf("after reply: %s", out)
+	}
+	if out := call(t, s, buf, "send_message", map[string]string{"to": "asker", "message": "x", "reply_to": "deadbeef"}); !strings.Contains(out, "no such message") {
+		t.Errorf("a wrong reply_to must fail loudly: %s", out)
+	}
+
+	// A reply arriving here names the message it answers and quotes it.
+	s.notifyMessage(peers.Message{ID: peers.NewID(), From: "asker", Content: "thanks", ReplyTo: "abc", Quote: "4222"}, false)
+	if last := posted[len(posted)-1]; !strings.Contains(last, `replying to your message abc ("4222")`) {
+		t.Errorf("reply header: %q", last)
+	}
+
+	// A post that failed is not a receipt.
+	s.post = func(string) error { return errors.New("socket gone") }
+	lost := peers.Message{ID: peers.NewID(), From: "asker", To: "reader", Content: "lost"}
+	s.notifyMessage(lost, false)
+	if out := call(t, s, buf, "message_status", map[string]string{"id": lost.ID}); !strings.Contains(out, "no receipt") {
+		t.Errorf("failed post recorded as shown: %s", out)
+	}
+}

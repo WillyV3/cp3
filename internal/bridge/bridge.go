@@ -28,8 +28,11 @@ import (
 // Naming --from explicitly removes the dependency on that environment
 // entirely, regardless of what the target runtime's tool execution actually
 // inherits.
-func ReplyHint(me, sender string) string {
-	return fmt.Sprintf("[peer message from %s — to reply, run:\ncp3 send --from %s --to %s <<'EOF'\nyour reply, any quotes or newlines as-is\nEOF\n]", sender, me, sender)
+//
+// --reply-to carries the message's ID back, so the sender's side shows which
+// of its messages the reply answers and `cp3 status` reports it as replied.
+func ReplyHint(me string, m peers.Message) string {
+	return fmt.Sprintf("[peer message %s from %s%s — to reply, run:\ncp3 send --from %s --to %s --reply-to %s <<'EOF'\nyour reply, any quotes or newlines as-is\nEOF\n]", m.ID, m.From, m.ReplyClause(), me, m.From, m.ID)
 }
 
 // Run claims p (machine-suffix fallback on collision), heartbeats, and
@@ -75,6 +78,11 @@ func RunWithClaim(ctx context.Context, c *peers.Client, p peers.Peer, onClaim fu
 	err = c.Subscribe(subCtx, actual.Agent, func(m peers.Message) {
 		if err := inject(actual.Agent, m); err != nil {
 			log.Printf("[bridge] inject from %s failed: %v", m.From, err)
+			return
+		}
+		// The runtime took it: record the receipt `cp3 status` reads.
+		if err := c.Shown(subCtx, m, actual.Agent); err != nil {
+			log.Printf("[bridge] receipt for %s not recorded: %v", m.ID, err)
 		}
 	})
 	if cause := context.Cause(subCtx); cause != nil && !errors.Is(cause, context.Canceled) {

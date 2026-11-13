@@ -543,6 +543,14 @@ func (s *server) notifyMessage(m peers.Message, replay bool) {
 		return
 	}
 	spoolRemove(s.name(), []string{m.ID})
+	s.shown(ctx, m)
+}
+
+// shown records the receipt a sender can look up with message_status.
+func (s *server) shown(ctx context.Context, m peers.Message) {
+	if err := s.c.Shown(ctx, m, s.name()); err != nil {
+		fmt.Fprintf(os.Stderr, "[cp3-mcp] receipt for %s not recorded: %v\n", m.ID, err)
+	}
 }
 
 // peerMessageText is a peer message as the session reads it. Claude Code
@@ -554,11 +562,12 @@ func peerMessageText(m peers.Message, from peers.Peer, replay bool) string {
 	if from.Cwd != "" {
 		where += " " + from.Cwd
 	}
-	h := fmt.Sprintf("[cp3 message from %s", m.From)
+	h := fmt.Sprintf("[cp3 message %s from %s", m.ID, m.From)
 	if where != "" {
 		h += " (" + strings.TrimSpace(where) + ")"
 	}
-	h += fmt.Sprintf(" — reply with the claude-peers send_message tool, to=%q, not SendMessage]", m.From)
+	h += m.ReplyClause()
+	h += fmt.Sprintf(" — reply with the claude-peers send_message tool, to=%q, reply_to=%q, not SendMessage]", m.From, m.ID)
 	if replay {
 		h += "\n[delivered late — received while this session was restarting]"
 	}
@@ -675,13 +684,17 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 		toolText(s.t, id, "%s", b.String())
 
 	case "send_message":
-		var a struct{ To, Message string }
+		var a struct {
+			To, Message string
+			ReplyTo     string `json:"reply_to"`
+		}
 		json.Unmarshal(call.Args, &a)
 		if a.To == "" || a.Message == "" {
 			toolErr(s.t, id, "send_message requires 'to' and 'message'")
 			return
 		}
-		status, serr := s.c.Send(ctx, peers.Message{From: s.name(), To: a.To, Content: a.Message, DeliverAs: "steer"})
+		m := peers.Message{ID: peers.NewID(), From: s.name(), To: a.To, Content: a.Message, DeliverAs: "steer", ReplyTo: a.ReplyTo}
+		status, serr := s.c.Send(ctx, m)
 		if err := serr; err != nil {
 			toolErr(s.t, id, "send failed: %v", err)
 			return
@@ -689,7 +702,17 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 		// This string is what every agent on the fleet reads to decide whether
 		// its message landed. It said "queues if offline" unconditionally,
 		// which is the lie that hid the rover bug for two days.
-		toolText(s.t, id, "%s", status.Human(a.To))
+		toolText(s.t, id, "%s · id %s", status.Human(a.To), m.ID)
+
+	case "message_status":
+		var a struct{ ID string }
+		json.Unmarshal(call.Args, &a)
+		st, err := s.c.Status(ctx, a.ID)
+		if err != nil {
+			toolErr(s.t, id, "message_status failed: %v", err)
+			return
+		}
+		toolText(s.t, id, "%s", st.Human())
 
 	case "set_summary":
 		var a struct{ Summary string }
@@ -727,7 +750,8 @@ func (s *server) handleCall(ctx context.Context, id any, params json.RawMessage)
 		var b strings.Builder
 		fmt.Fprintf(&b, "%d message(s):\n", len(msgs))
 		for _, m := range msgs {
-			fmt.Fprintf(&b, "\n[from %s] %s\n", m.From, m.Content)
+			fmt.Fprintf(&b, "\n[message %s from %s%s] %s\n", m.ID, m.From, m.ReplyClause(), m.Content)
+			s.shown(ctx, m)
 		}
 		toolText(s.t, id, "%s", b.String())
 

@@ -80,7 +80,10 @@ func TestBridgeStopsOnNameLoss(t *testing.T) {
 // the bridge's. ReplyHint must always name the sender explicitly so the
 // target runtime's own environment can never substitute a different one.
 func TestReplyHintNamesBothSidesExplicitly(t *testing.T) {
-	got := ReplyHint("inspiron-opencode", "deepseek-gpu")
+	got := ReplyHint("inspiron-opencode", peers.Message{ID: "abc123", From: "deepseek-gpu"})
+	if !strings.Contains(got, "--reply-to abc123") {
+		t.Errorf("reply hint does not carry the message id back: %s", got)
+	}
 	if !strings.Contains(got, "--from inspiron-opencode") {
 		t.Errorf("reply hint does not pin --from: %s", got)
 	}
@@ -182,5 +185,46 @@ func TestRunReleasesNameBeforeReturning(t *testing.T) {
 		if held() {
 			t.Fatal("name still held after Run returned and the connection closed")
 		}
+	}
+}
+
+// A message the runtime took is recorded as shown; one it refused is not, so
+// `cp3 status` never claims a delivery that did not happen.
+func TestBridgeRecordsShownOnlyWhenInjectSucceeds(t *testing.T) {
+	srv := runServer(t)
+	c, err := peers.Connect(srv.ClientURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Run(ctx, c, peers.Peer{Agent: "taker", Machine: "m", Session: "s"}, func(_ string, m peers.Message) error {
+		if m.Content == "refuse" {
+			return errors.New("runtime down")
+		}
+		return nil
+	})
+	shownBy := func(id string) string {
+		st, err := c.Status(context.Background(), id)
+		if err != nil || st.Shown == nil {
+			return ""
+		}
+		return st.Shown.By
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	ok := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "take"}
+	bad := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "refuse"}
+	for sent := false; time.Now().Before(deadline) && shownBy(ok.ID) == ""; time.Sleep(50 * time.Millisecond) {
+		if st, _ := c.Send(context.Background(), bad); !sent && st != peers.NoInbox {
+			c.Send(context.Background(), ok)
+			sent = true
+		}
+	}
+	if got := shownBy(ok.ID); got != "taker" {
+		t.Fatalf("accepted message: shown by %q, want taker", got)
+	}
+	if got := shownBy(bad.ID); got != "" {
+		t.Fatalf("refused message recorded as shown by %q", got)
 	}
 }

@@ -37,7 +37,10 @@ in `~/.local/share/cp3`).
 cp3 run --as api             # launch claude under a chosen peer name
 cp3 peers                    # who's online
 cp3 peers --wait api --timeout 45s   # block until a spawning peer registers (exit 0 = live)
-cp3 send --to frontend "does /api/v2/users paginate?"   # reports delivered / queued / NOT DELIVERED
+cp3 send --to frontend "does /api/v2/users paginate?"   # reports delivered / queued / NOT DELIVERED, and the message id
+cp3 status <id>              # how far that message got: no receipt yet, shown, or replied
+cp3 send --to api --reply-to <id> "yes, cursor-based"   # answer a message by the id in its header
+cp3 peers --verbose          # debugging: adds each peer's cp3 version
 cp3 watch                    # firehose: every event on the network, live
 cp3 statusline               # one colored line for your statusline
 ```
@@ -59,6 +62,13 @@ the directory's name. `CLAUDE_PEERS_EPHEMERAL=1` forces this for any session.
 
 Messages to offline agents queue durably and deliver on reconnect.
 
+Sending never waits for the other agent. Every delivered message is headed
+with its id; a reply that carries that id (`--reply-to`, or `reply_to` on the
+MCP tool) arrives on the other side as "replying to your message <id>" with
+the first line of the original. `cp3 status <id>` reads the receipts: *shown*
+means the recipient's runtime took the message into a live session, *replied*
+means they answered it. Shown is not proof the model read it; a reply is.
+
 ## Multiple machines
 
 Host: `cp3 serve --host 0.0.0.0`. Every other machine:
@@ -69,6 +79,14 @@ cp3 setup --nats nats://<host>:4222   # + copy ~/.config/cp3/token across once
 
 Already run NATS? Set `NATS_URL` (env or `~/.config/cp3/url`) and cp3 is just
 a client.
+
+One server is the default and all most setups need. To survive losing a
+server, run a NATS cluster yourself and point cp3 at it: a comma-separated
+list of servers as the URL, and `CP3_REPLICAS=3` (or `~/.config/cp3/replicas`)
+on one machine, which tells the cluster to keep the log and the roster on
+three servers. Clients without the setting keep whatever the cluster has;
+every machine on a cluster needs cp3 0.6.0 or newer, since older builds
+reset the count to one.
 
 ## Security
 
