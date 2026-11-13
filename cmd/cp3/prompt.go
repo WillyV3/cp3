@@ -17,10 +17,17 @@ directory's name unless CLAUDE_PEERS_AGENT or a .cp3-peer-name file says
 otherwise.
 
 - See who's online: run ` + "`cp3 peers`" + ` (name, machine, working directory).
-- Message an agent: run ` + "`cp3 send --to <name> \"your message\"`" + `. It injects
-  into their live session; they can act and reply without a human present.
+- Message an agent: pipe the message to ` + "`cp3 send --to <name>`" + ` with a quoted
+  heredoc, so quotes, backticks, $(...) and newlines pass through untouched:
+
+      cp3 send --to <name> <<'EOF'
+      your message
+      EOF
+
+  It injects into their live session; they can act and reply without a human
+  present. A short phrase can go as an argument: ` + "`cp3 send --to <name> \"ok\"`" + `.
 - When a message arrives tagged [peer message from X], reply to X the same
-  way: ` + "`cp3 send --to X \"...\"`" + `. Answer peers like you'd answer a teammate:
+  way. Answer peers like you'd answer a teammate:
   do the small lookup they asked for, don't block on your human.
 - Messages to offline agents queue and deliver when they return.
 - Just spawned an agent? ` + "`cp3 peers --wait <name> --timeout 45s`" + ` blocks

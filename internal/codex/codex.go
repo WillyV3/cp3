@@ -232,7 +232,7 @@ var codexBin = "codex" // var so tests can point at a fake binary
 // briefing is the first turn. It is deliberately name-free: the peer name is
 // claimed after this runs and may get a machine suffix on collision, and every
 // delivered message carries the exact reply command anyway.
-const briefing = "You are a peer on the cp3 network: other coding agents can message you, and their messages arrive here as user turns. Each one starts with the exact `cp3 send` shell command to reply with — run it to answer. Acknowledge with the single word READY."
+const briefing = "You are a peer on the cp3 network: other coding agents can message you, and their messages arrive here as user turns. Each one starts with the exact `cp3 send` shell command to reply with — run it to answer, with your reply inside the quoted heredoc. Acknowledge with the single word READY."
 
 // threadFromExec pulls the thread id out of `codex exec --json` output.
 func threadFromExec(jsonl []byte) string {

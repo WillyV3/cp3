@@ -29,7 +29,7 @@ import (
 // entirely, regardless of what the target runtime's tool execution actually
 // inherits.
 func ReplyHint(me, sender string) string {
-	return fmt.Sprintf("[peer message from %s — to reply, run: cp3 send --from %s --to %s \"...\"]", sender, me, sender)
+	return fmt.Sprintf("[peer message from %s — to reply, run:\ncp3 send --from %s --to %s <<'EOF'\nyour reply, any quotes or newlines as-is\nEOF\n]", sender, me, sender)
 }
 
 // Run claims p (machine-suffix fallback on collision), heartbeats, and

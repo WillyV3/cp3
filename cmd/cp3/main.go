@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -254,12 +255,16 @@ func cmdSend(args []string) {
 	to := fs.String("to", "", "recipient agent")
 	mode := fs.String("mode", "steer", "delivery mode: steer|queue")
 	fs.Parse(args)
-	content := strings.Join(fs.Args(), " ")
+	content, err := messageText(fs.Args(), os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "send:", err)
+		os.Exit(2)
+	}
 	if *from == "" {
 		*from = callerIdentity()
 	}
 	if *from == "" || *to == "" || content == "" {
-		fmt.Fprintln(os.Stderr, "send: --to and a message are required (--from resolved from identity)")
+		fmt.Fprintln(os.Stderr, "send: --to and a message are required: as arguments, or on stdin with no arguments or -")
 		os.Exit(2)
 	}
 	c := connect()
@@ -278,6 +283,21 @@ func cmdSend(args []string) {
 	if status == peers.NoInbox {
 		os.Exit(3) // scripts must be able to detect a message that went nowhere
 	}
+}
+
+// messageText is the message from argv, or from stdin when there are no
+// arguments or just "-". Stdin is how a shell-driven agent sends quotes,
+// backticks, $(...) and newlines without escaping them: a quoted heredoc
+// passes them through verbatim. The heredoc's final newline is dropped.
+func messageText(args []string, stdin io.Reader) (string, error) {
+	if len(args) > 0 && !(len(args) == 1 && args[0] == "-") {
+		return strings.Join(args, " "), nil
+	}
+	b, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("reading stdin: %w", err)
+	}
+	return strings.TrimSuffix(string(b), "\n"), nil
 }
 
 // callerIdentity resolves who is sending. A `cp3 send` run from inside a
