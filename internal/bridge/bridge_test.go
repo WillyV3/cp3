@@ -212,15 +212,25 @@ func TestBridgeRecordsShownOnlyWhenInjectSucceeds(t *testing.T) {
 		}
 		return st.Shown.By
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	ok := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "take"}
-	bad := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "refuse"}
-	for sent := false; time.Now().Before(deadline) && shownBy(ok.ID) == ""; time.Sleep(50 * time.Millisecond) {
-		if st, _ := c.Send(context.Background(), bad); !sent && st != peers.NoInbox {
-			c.Send(context.Background(), ok)
-			sent = true
+	wait := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timeout waiting for %s", what)
+			}
 		}
 	}
+	wait("the bridge to claim its name", func() bool {
+		list, _ := c.Peers(context.Background())
+		return len(list) == 1
+	})
+	// Refused first: the inbox is ordered, so once the accepted one is shown
+	// the refused one has already been through inject.
+	bad := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "refuse"}
+	ok := peers.Message{ID: peers.NewID(), From: "x", To: "taker", Content: "take"}
+	c.Send(context.Background(), bad)
+	c.Send(context.Background(), ok)
+	wait("the accepted message's receipt", func() bool { return shownBy(ok.ID) != "" })
 	if got := shownBy(ok.ID); got != "taker" {
 		t.Fatalf("accepted message: shown by %q, want taker", got)
 	}

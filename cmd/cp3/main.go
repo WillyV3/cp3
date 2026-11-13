@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -293,23 +294,16 @@ func cmdSend(args []string) {
 // cmdStatus reports how far a sent message got: no receipt, shown, or
 // replied. It reads the log and returns; it never waits on the recipient.
 func cmdStatus(args []string) {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "machine-readable: id, shown{by,ts,...}, replied{by,replyId,ts}")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
+	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "status: usage: cp3 status <message-id>   (the id cp3 send printed)")
 		os.Exit(2)
 	}
 	c := connect()
 	defer c.Close()
-	st, err := c.Status(context.Background(), fs.Arg(0))
+	st, err := c.Status(context.Background(), args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "status:", err)
 		os.Exit(1)
-	}
-	if *asJSON {
-		json.NewEncoder(os.Stdout).Encode(st)
-		return
 	}
 	fmt.Println(st.Human())
 }
@@ -469,26 +463,25 @@ func cmdPeers(args []string) {
 		fmt.Println(string(out))
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	dash := func(s string) string {
-		if s == "" {
-			return "-"
+	writePeers(os.Stdout, list, *verbose)
+}
+
+// writePeers prints the roster table. verbose adds the cp3 build each peer
+// runs; a peer on a build too old to report one shows "-".
+func writePeers(out io.Writer, list []peers.Peer, verbose bool) {
+	w := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	defer w.Flush()
+	row := func(p peers.Peer) {
+		cols := []string{p.Agent, cmp.Or(p.Runtime, "-"), p.Machine, p.Cwd}
+		if verbose {
+			cols = append(cols, cmp.Or(p.Version, "-"))
 		}
-		return s
+		fmt.Fprintln(w, strings.Join(cols, "\t"))
 	}
-	head := "AGENT\tRUNTIME\tMACHINE\tCWD"
-	if *verbose {
-		head += "\tCP3"
-	}
-	fmt.Fprintln(w, head)
+	row(peers.Peer{Agent: "AGENT", Runtime: "RUNTIME", Machine: "MACHINE", Cwd: "CWD", Version: "CP3"})
 	for _, p := range list {
-		row := fmt.Sprintf("%s\t%s\t%s\t%s", p.Agent, dash(p.Runtime), p.Machine, p.Cwd)
-		if *verbose {
-			row += "\t" + dash(p.Version)
-		}
-		fmt.Fprintln(w, row)
+		row(p)
 	}
-	w.Flush()
 }
 
 func cmdWatch(args []string) {

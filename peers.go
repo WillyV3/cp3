@@ -166,9 +166,10 @@ func replicasFromEnv() (int, error) {
 	if v == "" {
 		return 0, nil
 	}
+	// ponytail: no range check here; the server refuses a count it cannot keep.
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > 5 {
-		return 0, fmt.Errorf("replicas: %q is not a number from 1 to 5", v)
+	if err != nil {
+		return 0, fmt.Errorf("replicas: %q is not a number", v)
 	}
 	return n, nil
 }
@@ -280,11 +281,9 @@ func (c *Client) kvBucket(ctx context.Context) (jetstream.KeyValue, error) {
 	return kv, nil
 }
 
-// NewID returns a fresh message ID. A caller that needs to tell its user the
+// NewID returns a fresh ID. A caller that needs to tell its user a message's
 // ID sets it on the Message before Send; Send assigns one otherwise.
-func NewID() string { return newID() }
-
-func newID() string {
+func NewID() string {
 	var b [16]byte
 	rand.Read(b[:])
 	return hex.EncodeToString(b[:])
@@ -298,7 +297,7 @@ func (c *Client) publish(ctx context.Context, subject string, t EventType, actor
 	if err != nil {
 		return fmt.Errorf("marshal %s data: %w", t, err)
 	}
-	env := Envelope{V: 1, ID: newID(), Type: t, TS: nowMillis(), Actor: actor, Data: raw}
+	env := Envelope{V: 1, ID: NewID(), Type: t, TS: nowMillis(), Actor: actor, Data: raw}
 	body, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
@@ -654,22 +653,17 @@ func (c *Client) Send(ctx context.Context, m Message) (DeliveryStatus, error) {
 		return NoInbox, err
 	}
 	if m.ID == "" {
-		m.ID = newID()
+		m.ID = NewID()
 	}
 	if m.TS == 0 {
 		m.TS = nowMillis()
 	}
 	if m.ReplyTo != "" {
-		// The ID in a reply comes from a header that only a receiver which
-		// also records the receipt ever prints, so a miss is a wrong ID.
-		shown, err := c.lastReceipt(ctx, m.ReplyTo, receiptShown)
+		quote, err := c.quoteOf(ctx, m.ReplyTo)
 		if err != nil {
 			return NoInbox, err
 		}
-		if shown == nil {
-			return NoInbox, fmt.Errorf("%w: %q — copy the id from the message header, or send without a reply-to", ErrUnknownMessage, m.ReplyTo)
-		}
-		m.Quote = shown.Quote
+		m.Quote = quote
 	}
 	// Probe BEFORE publishing: after the write the consumer may have already
 	// picked it up, which would make a live agent look merely queued.
@@ -689,6 +683,20 @@ func (c *Client) Send(ctx context.Context, m Message) (DeliveryStatus, error) {
 // ErrUnknownMessage is returned for a reply to a message ID nobody was shown.
 var ErrUnknownMessage = errors.New("no such message")
 
+// quoteOf returns the first line of the message a reply answers. The ID in a
+// reply comes from a header that only a receiver which also records the shown
+// receipt ever prints, so no receipt means a wrong ID.
+func (c *Client) quoteOf(ctx context.Context, id string) (string, error) {
+	shown, err := c.lastReceipt(ctx, id, receiptShown)
+	if err != nil {
+		return "", err
+	}
+	if shown == nil {
+		return "", fmt.Errorf("%w: %q — copy the id from the message header, or send without a reply-to", ErrUnknownMessage, id)
+	}
+	return shown.Quote, nil
+}
+
 const (
 	receiptShown   = "shown"
 	receiptReplied = "replied"
@@ -701,7 +709,6 @@ type Receipt struct {
 	ID      string `json:"id"`                // the message this is about
 	State   string `json:"state"`             // "shown" or "replied"
 	By      string `json:"by"`                // whose session it reached, or who replied
-	From    string `json:"from,omitempty"`    // shown: the original sender
 	Quote   string `json:"quote,omitempty"`   // shown: first line of the original
 	ReplyID string `json:"replyId,omitempty"` // replied: the reply's own ID
 	TS      int64  `json:"ts"`
@@ -724,7 +731,7 @@ func (c *Client) publishReceipt(ctx context.Context, r Receipt) error {
 // Shown records that m reached by's live session: the runtime accepted it.
 // It does not mean the model read it; only a reply proves that.
 func (c *Client) Shown(ctx context.Context, m Message, by string) error {
-	return c.publishReceipt(ctx, Receipt{ID: m.ID, State: receiptShown, By: by, From: m.From, Quote: firstLine(m.Content), TS: nowMillis()})
+	return c.publishReceipt(ctx, Receipt{ID: m.ID, State: receiptShown, By: by, Quote: firstLine(m.Content), TS: nowMillis()})
 }
 
 // firstLine is the first non-blank line of s, cut to 80 characters.
@@ -741,6 +748,8 @@ func firstLine(s string) string {
 }
 
 // lastReceipt returns the newest receipt of one state for a message, or nil.
+// ponytail: two round trips per call (stream handle, then the message); keep
+// the handle on the Client if status lookups ever get hot.
 func (c *Client) lastReceipt(ctx context.Context, id, state string) (*Receipt, error) {
 	if err := validMessageID(id); err != nil {
 		return nil, err
@@ -769,9 +778,8 @@ func (c *Client) lastReceipt(ctx context.Context, id, state string) (*Receipt, e
 
 // MessageStatus is what the log knows about one sent message.
 type MessageStatus struct {
-	ID      string   `json:"id"`
-	Shown   *Receipt `json:"shown,omitempty"`
-	Replied *Receipt `json:"replied,omitempty"`
+	ID             string
+	Shown, Replied *Receipt
 }
 
 // Status reports how far a sent message got. It reads the log and returns;

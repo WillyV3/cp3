@@ -216,8 +216,13 @@ func spoolPeek(t *testing.T, agent string) []peers.Message {
 func TestReplyLinkThroughTheServer(t *testing.T) {
 	s, buf := testServer(t, "reader")
 	ctx := context.Background()
-	if err := s.c.Register(ctx, peers.Peer{Agent: "asker", Session: "s-asker"}); err != nil {
-		t.Fatal(err)
+	for _, p := range []peers.Peer{
+		{Agent: "bystander", Machine: "otherbox", Cwd: "/elsewhere", Session: "s-by"},
+		{Agent: "asker", Machine: "askbox", Cwd: "/ask", Session: "s-asker"},
+	} {
+		if err := s.c.Register(ctx, p); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var posted []string
 	s.post = func(text string) error { posted = append(posted, text); return nil }
@@ -229,6 +234,9 @@ func TestReplyLinkThroughTheServer(t *testing.T) {
 	s.notifyMessage(q, false)
 	if len(posted) != 1 || !strings.Contains(posted[0], "[cp3 message "+q.ID+" from asker") || !strings.Contains(posted[0], `reply_to="`+q.ID+`"`) {
 		t.Fatalf("header does not carry the id to reply with: %q", posted)
+	}
+	if !strings.Contains(posted[0], "from asker (askbox /ask)") {
+		t.Errorf("header must say where the sender is, and only the sender: %q", posted[0])
 	}
 	if out := call(t, s, buf, "message_status", map[string]string{"id": q.ID}); !strings.Contains(out, "shown") || !strings.Contains(out, "reader") {
 		t.Errorf("after post: %s", out)
@@ -244,10 +252,13 @@ func TestReplyLinkThroughTheServer(t *testing.T) {
 	if out := call(t, s, buf, "send_message", map[string]string{"to": "asker", "message": "x", "reply_to": "deadbeef"}); !strings.Contains(out, "no such message") {
 		t.Errorf("a wrong reply_to must fail loudly: %s", out)
 	}
+	if out := call(t, s, buf, "message_status", map[string]string{"id": "not an id"}); !strings.Contains(out, "message_status failed") {
+		t.Errorf("a malformed id must be an error, not a status: %s", out)
+	}
 
 	// A reply arriving here names the message it answers and quotes it.
-	s.notifyMessage(peers.Message{ID: peers.NewID(), From: "asker", Content: "thanks", ReplyTo: "abc", Quote: "4222"}, false)
-	if last := posted[len(posted)-1]; !strings.Contains(last, `replying to your message abc ("4222")`) {
+	s.notifyMessage(peers.Message{ID: peers.NewID(), From: "asker", Content: "thanks", ReplyTo: "abc", Quote: "4222"}, true)
+	if last := posted[len(posted)-1]; !strings.Contains(last, `replying to your message abc ("4222")`) || !strings.Contains(last, "delivered late") {
 		t.Errorf("reply header: %q", last)
 	}
 
@@ -257,5 +268,19 @@ func TestReplyLinkThroughTheServer(t *testing.T) {
 	s.notifyMessage(lost, false)
 	if out := call(t, s, buf, "message_status", map[string]string{"id": lost.ID}); !strings.Contains(out, "no receipt") {
 		t.Errorf("failed post recorded as shown: %s", out)
+	}
+
+	// check_messages hands it over once (it sits in the spool and in memory),
+	// with its id, and that handover is the receipt.
+	spoolAppend("reader", lost)
+	out = call(t, s, buf, "check_messages", map[string]string{})
+	if !strings.Contains(out, "1 message(s)") || !strings.Contains(out, "[message "+lost.ID+" from asker] lost") {
+		t.Errorf("check_messages: %s", out)
+	}
+	if out := call(t, s, buf, "message_status", map[string]string{"id": lost.ID}); !strings.Contains(out, "shown") {
+		t.Errorf("a message handed over by check_messages has no receipt: %s", out)
+	}
+	if out := call(t, s, buf, "check_messages", map[string]string{}); !strings.Contains(out, "No new messages") {
+		t.Errorf("check_messages must clear what it handed over: %s", out)
 	}
 }

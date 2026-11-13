@@ -416,8 +416,8 @@ func TestReplyLinkAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := c.Status(ctx, q.ID)
-	if err != nil || st.Shown != nil || st.Replied != nil {
-		t.Fatalf("before delivery: %+v, %v", st, err)
+	if err != nil || st.Shown != nil || st.Replied != nil || !strings.HasPrefix(st.Human(), "no receipt") {
+		t.Fatalf("before delivery: %+v / %s, %v", st, st.Human(), err)
 	}
 
 	// A reply to a message nobody was shown is a wrong id, and says so.
@@ -446,11 +446,38 @@ func TestReplyLinkAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "reply delivered", func() bool { mu.Lock(); defer mu.Unlock(); return got.ID == r.ID })
+	if got.TS == 0 {
+		t.Error("a message sent without a timestamp must get one")
+	}
 	if got.ReplyTo != q.ID || got.Quote != "does /api/v2/users paginate?" {
 		t.Errorf("reply lost its link or quote: %+v", got)
 	}
 	if want := `, replying to your message ` + q.ID + ` ("does /api/v2/users paginate?")`; got.ReplyClause() != want {
 		t.Errorf("clause %q, want %q", got.ReplyClause(), want)
+	}
+	if got := (Message{ReplyTo: "abc"}).ReplyClause(); got != ", replying to your message abc" {
+		t.Errorf("clause with no quote: %q", got)
+	}
+	if got := (Message{}).ReplyClause(); got != "" {
+		t.Errorf("a message that is not a reply has a clause: %q", got)
+	}
+	if got := []rune(firstLine(strings.Repeat("é", 200))); len(got) != 80 || got[79] != '…' {
+		t.Errorf("a long first line must be cut to 80 characters, got %d", len(got))
+	}
+	if got := firstLine(" \n\t\n"); got != "" {
+		t.Errorf("blank message quote: %q", got)
+	}
+	if exact := strings.Repeat("x", 80); firstLine(exact) != exact {
+		t.Error("a first line of exactly 80 characters must not be cut")
+	}
+	// An id becomes part of a subject on the log: only plain tokens pass.
+	for id, ok := range map[string]bool{
+		q.ID: true, strings.Repeat("a", 64): true, "A-b_9": true,
+		"": false, strings.Repeat("a", 65): false, "a.b": false, "a b": false, "*": false, ">": false,
+	} {
+		if err := validMessageID(id); (err == nil) != ok {
+			t.Errorf("validMessageID(%q) = %v, want ok=%v", id, err, ok)
+		}
 	}
 	st, _ = c.Status(ctx, q.ID)
 	if st.Replied == nil || st.Replied.By != "answerer" || st.Replied.ReplyID != r.ID || !strings.HasPrefix(st.Human(), "replied:") {
