@@ -4,3 +4,4 @@
 nats-store/
 *.log
 dist/
+__pycache__/
