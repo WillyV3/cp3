@@ -126,6 +126,15 @@ attaches the TUI to it. `--headless` skips the TUI. `OPENCODE_MODEL=provider/mod
 picks the model; unset uses opencode's own default. `OPENCODE_SESSION_ID` joins
 a session you already have open instead of creating one.
 
+## Add-ons
+
+Optional, not installed with cp3:
+
+- [`addons/spawn-peer`](addons/spawn-peer) — `spawn-peer <name> [dir]` opens a
+  tmux session with the agent and an editor side by side, starts the agent as
+  that peer, and returns once it is on the network. Comes with `/spawn-peer`
+  and `/kill-peer` commands for Claude Code.
+
 ## Operations
 
 ```sh

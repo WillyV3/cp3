@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# spawn-peer <name> [dir] [--harness claude|opencode|codex]
+#
+# Start a cp3 peer in its own tmux session: the agent's TUI on the left, an
+# editor on the right, both in the project directory. Returns once the peer
+# is registered on the network, so exit 0 means it can be messaged.
+#
+# The agent is typed into the left pane's shell, not run as the pane's
+# command, so the session outlives the agent: quit it and the workspace stays.
+#
+# Environment (all optional):
+#   CLAUDE_ARGS      extra flags for claude, e.g. "--resume <id>"
+#   CODEX_ARGS       config overrides for codex, passed after `--`
+#   OPENCODE_MODEL   provider/model for opencode
+#   SPAWN_PEER_SIDE  command for the right pane; empty for no split
+#                    (default: "nvim ." when nvim is installed)
+set -uo pipefail
+
+usage='usage: spawn-peer <name> [dir] [--harness claude|opencode|codex]'
+die() { echo "spawn-peer: $2" >&2; exit "$1"; }
+
+harness=claude name='' dir=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --harness) harness=${2:-}; shift; [ $# -eq 0 ] || shift ;;
+    --harness=*) harness=${1#--harness=}; shift ;;
+    -h | --help) echo "$usage"; exit 0 ;;
+    *)
+      if [ -z "$name" ]; then name=$1; elif [ -z "$dir" ]; then dir=$1; else die 2 "$usage"; fi
+      shift ;;
+  esac
+done
+[ -n "$name" ] || die 2 "$usage"
+[[ $name =~ ^[a-z0-9][a-z0-9-]*$ ]] || die 2 "name must be lowercase letters, digits and hyphens (got: $name)"
+asked=${dir:-$PWD}
+# cd + pwd -P, not realpath: macOS realpath has no -e.
+dir=$(cd "$asked" 2>/dev/null && pwd -P) || die 2 "project dir does not exist: $asked"
+
+case "$harness" in
+  claude) launch="cp3 run --as $name${CLAUDE_ARGS:+ $CLAUDE_ARGS}" ;;
+  codex) launch="cp3 codex --as $name${CODEX_ARGS:+ -- $CODEX_ARGS}" ;;
+  # The pane's shell has the tmux server's environment, not this one, so the
+  # model has to travel in the typed command.
+  opencode) launch="${OPENCODE_MODEL:+OPENCODE_MODEL=$(printf %q "$OPENCODE_MODEL") }cp3 opencode --as $name" ;;
+  *) die 2 "unknown harness '$harness' (claude|opencode|codex)" ;;
+esac
+for need in tmux cp3 "$harness"; do
+  command -v "$need" >/dev/null || die 1 "$need is not on PATH"
+done
+
+# "=name" is an exact match; a bare name also matches any session it prefixes.
+tmux has-session -t "=$name" 2>/dev/null && die 1 "tmux session '$name' already exists: attach to it or kill it first"
+cp3 peers --wait "$name" --timeout 1s >/dev/null 2>&1 && die 1 "a peer named '$name' is already live"
+
+# The marker names this workspace's peer for tools that look after the agent
+# has exited (sessui's peer column). --as outranks it, so one that is already
+# there, under any name, is left alone.
+[ -e "$dir/.cp3-peer-name" ] || [ -e "$dir/.claude-peers-agent" ] || printf '%s\n' "$name" >"$dir/.cp3-peer-name"
+
+if [ "${SPAWN_PEER_SIDE+set}" = set ]; then
+  side=$SPAWN_PEER_SIDE
+elif command -v nvim >/dev/null; then
+  side='nvim .'
+else
+  side=''
+fi
+
+tmux new-session -d -s "$name" -c "$dir" -x 260 -y 60 || die 1 "could not create tmux session '$name'"
+left=$(tmux display-message -p -t "=$name:" '#{pane_id}')
+[ -z "$side" ] || tmux split-window -h -t "$left" -c "$dir" "$side"
+tmux send-keys -t "$left" -l "$launch"
+tmux send-keys -t "$left" Enter
+
+echo "spawned '$name' ($harness) in $dir"
+echo "  attach: tmux attach -t '=$name'    switch: tmux switch-client -t '=$name'"
+if cp3 peers --wait "$name" --timeout 45s >/dev/null 2>&1; then
+  echo "peer '$name' is live and addressable"
+else
+  echo "spawn-peer: '$name' did not register in 45s. A first-run prompt (folder trust, login) may be waiting for you: tmux attach -t '=$name'" >&2
+  exit 1
+fi
